@@ -9,23 +9,26 @@ npm install
 npm run dev
 ```
 
-## Neon database
+## Neon database (via Vercel)
 
 ```bash
-export NEON_API_KEY=your_neon_api_key
-bash scripts/setup-neon.sh
+vercel link
+vercel integration add neon
+node scripts/migrate-schema.mjs
 ```
-
-This creates a Neon project, applies `sql/schema.sql`, and writes `.env.local`.
 
 ## Deploy on Vercel
 
-1. Push this repo to GitHub.
-2. Import the repo in [Vercel](https://vercel.com/new).
-3. Set environment variables from `.env.local`:
-   - `DATABASE_URL`
-   - `DASHBOARD_API_KEY`
-   - `VITE_DASHBOARD_API_KEY`
-4. Deploy.
+```bash
+vercel --prod
+```
 
-Local API testing: `npx vercel dev`
+Live app: https://work-raaz-0.vercel.app
+
+## Push to GitHub
+
+```bash
+bash scripts/push-github.sh productivity-dashboard
+```
+
+Local API testing: `vercel dev`
