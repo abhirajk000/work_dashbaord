@@ -12,4 +12,4 @@ jobs:
       - name: Run reminder cron
         run: |
           curl -sfS -H "Authorization: Bearer ${{ secrets.DASHBOARD_API_KEY }}" \
-            "https://work-raaz-0.vercel.app/api/cron/reminders"
+            "https://track-raaz-0.vercel.app/api/cron/reminders"

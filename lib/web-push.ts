@@ -91,7 +91,7 @@ export async function sendWebPushToAll(payload: WebPushPayload): Promise<number>
     process.env.APP_URL ??
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : "https://work-raaz-0.vercel.app");
+      : "https://track-raaz-0.vercel.app");
 
   const body = JSON.stringify({
     title: payload.title,

@@ -23,7 +23,7 @@ node scripts/migrate-schema.mjs
 vercel --prod
 ```
 
-Live app: https://work-raaz-0.vercel.app
+Live app: https://track-raaz-0.vercel.app
 
 ## Push to GitHub
 
