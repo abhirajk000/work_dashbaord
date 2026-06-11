@@ -1,6 +1,32 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDashboardState, saveDashboardState } from "../lib/db";
+import { neon } from "@neondatabase/serverless";
 import type { DashboardState } from "../lib/dashboard-types";
+
+const ROW_ID = "default";
+
+function getSql() {
+  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+  if (!url) throw new Error("DATABASE_URL or POSTGRES_URL is not set");
+  return neon(url);
+}
+
+async function getDashboardState(): Promise<DashboardState | null> {
+  const sql = getSql();
+  const rows = await sql`SELECT data FROM dashboard_state WHERE id = ${ROW_ID}`;
+  if (!rows.length) return null;
+  return rows[0].data as DashboardState;
+}
+
+async function saveDashboardState(data: DashboardState): Promise<void> {
+  const sql = getSql();
+  await sql`
+    INSERT INTO dashboard_state (id, data, updated_at)
+    VALUES (${ROW_ID}, ${data}, NOW())
+    ON CONFLICT (id) DO UPDATE SET
+      data = EXCLUDED.data,
+      updated_at = NOW()
+  `;
+}
 
 function isAuthorized(req: VercelRequest): boolean {
   const key = process.env.DASHBOARD_API_KEY;
