@@ -16,6 +16,13 @@ import {
   sendTestNtfyNotification,
 } from "./src/lib/ntfy-notifications";
 import {
+  getWebPushPermission,
+  isWebPushSupported,
+  subscribeWebPush,
+  syncWebPushSubscription,
+  unsubscribeWebPush,
+} from "./src/lib/web-push-client";
+import {
   Check,
   Plus,
   Trash2,
@@ -2290,7 +2297,7 @@ function HabitMasterEditor({
       {habitsOpen && (
         <div className={`px-2 pb-2 pt-1 ${tabbed ? "flex min-h-0 flex-1 flex-col" : "border-t border-th-50"}`}>
           <p className="mb-2 shrink-0 text-[10px] leading-snug text-th-500">
-            Turn on reminders in the bell menu. Set a time, tap Save — ntfy pings at that exact time.
+            Turn on reminders in the bell menu. Enable browser push or use the ntfy app (Tracker). Set a time, then Save.
           </p>
           <div className="mb-1 flex shrink-0 justify-end">
             <button
@@ -2646,6 +2653,8 @@ function NotificationPanel({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [webPushState, setWebPushState] = useState<"unknown" | "subscribed" | "not-subscribed" | "denied" | "unsupported">("unknown");
+  const webPushSupported = isWebPushSupported();
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, bottom: undefined as number | undefined });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2691,6 +2700,30 @@ function NotificationPanel({
     };
   }, [open, updateMenuPos]);
 
+  useEffect(() => {
+    if (!webPushSupported) {
+      setWebPushState("unsupported");
+      return;
+    }
+    void (async () => {
+      const permission = await getWebPushPermission();
+      if (permission === "unsupported") {
+        setWebPushState("unsupported");
+        return;
+      }
+      if (permission === "denied") {
+        setWebPushState("denied");
+        return;
+      }
+      if (permission === "granted") {
+        const synced = await syncWebPushSubscription();
+        setWebPushState(synced === "subscribed" ? "subscribed" : "not-subscribed");
+        return;
+      }
+      setWebPushState("not-subscribed");
+    })();
+  }, [webPushSupported, open]);
+
   const patchSettings = (patch: Partial<NotificationSettings>) => {
     onChange(
       normalizeNotificationSettings({
@@ -2711,6 +2744,48 @@ function NotificationPanel({
       })
     );
     setStatus(next ? "Reminders enabled." : "Reminders turned off.");
+    if (next && webPushSupported && webPushState === "not-subscribed") {
+      void handleEnableWebPush(true);
+    }
+  };
+
+  const handleEnableWebPush = async (quiet = false) => {
+    if (!webPushSupported) return;
+    if (!quiet) {
+      setStatus(null);
+      setBusy(true);
+    }
+    try {
+      const result = await subscribeWebPush();
+      if (result === "subscribed") {
+        setWebPushState("subscribed");
+        if (!quiet) setStatus("Browser notifications enabled.");
+      } else if (result === "denied") {
+        setWebPushState("denied");
+        if (!quiet) setStatus("Browser notifications blocked — allow them in system settings.");
+      } else {
+        setWebPushState("unsupported");
+        if (!quiet) setStatus("Browser notifications are not available on this device.");
+      }
+    } catch (err) {
+      if (!quiet) setStatus(err instanceof Error ? err.message : "Could not enable browser notifications.");
+    } finally {
+      if (!quiet) setBusy(false);
+    }
+  };
+
+  const handleDisableWebPush = async () => {
+    setStatus(null);
+    setBusy(true);
+    try {
+      await unsubscribeWebPush();
+      setWebPushState("not-subscribed");
+      setStatus("Browser notifications turned off.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Could not disable browser notifications.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleTest = async () => {
@@ -2718,7 +2793,7 @@ function NotificationPanel({
     setBusy(true);
     try {
       await sendTestNtfyNotification();
-      setStatus("Notification sent to ntfy.sh/Tracker — check the ntfy app.");
+      setStatus("Test sent via ntfy and browser push (if enabled).");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Notification failed.");
     } finally {
@@ -2789,6 +2864,40 @@ function NotificationPanel({
                 />
               </label>
 
+              {webPushSupported && (
+                <div className="mb-3 rounded-xl border border-th-100 bg-th-50/60 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-th-700">Browser notifications</span>
+                    {webPushState === "subscribed" ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleDisableWebPush()}
+                        className="rounded-lg border border-th-200 bg-white px-2 py-1 text-[10px] font-bold text-th-700 hover:bg-th-50 disabled:opacity-50"
+                      >
+                        On
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy || webPushState === "denied"}
+                        onClick={() => void handleEnableWebPush()}
+                        className="rounded-lg bg-grad-th-btn px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50"
+                      >
+                        Enable
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[10px] leading-snug text-th-500">
+                    {webPushState === "subscribed"
+                      ? "This device gets reminders in the browser too."
+                      : webPushState === "denied"
+                        ? "Notifications are blocked in browser settings."
+                        : "Optional — works alongside the ntfy app."}
+                  </p>
+                </div>
+              )}
+
               <div className={`space-y-2.5 ${settings.enabled ? "" : "pointer-events-none opacity-50"}`}>
                 <label className="flex items-center justify-between gap-2 rounded-xl border border-th-100 px-3 py-2">
                   <span className="text-xs font-medium text-th-700">Morning kickoff</span>
@@ -2839,11 +2948,7 @@ function NotificationPanel({
                   Send test notification
                 </button>
                 <p className="text-[10px] leading-snug text-th-500">
-                  Keep this enabled for scheduled habit pings. Subscribe to <strong>Tracker</strong> in the{" "}
-                  <a href={NTFY_SUBSCRIBE_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-th-700 underline">
-                    ntfy app
-                  </a>{" "}
-                  first. Use the bell on each habit reminder to preview that ping.
+                  Reminders go to <strong>ntfy (Tracker)</strong> and your browser if enabled. On iPhone, add Tracker to your Home Screen for browser push.
                 </p>
               </div>
 

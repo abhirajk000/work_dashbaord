@@ -3,8 +3,8 @@ import {
   buildHabitFollowupReminder,
   buildHabitPrimaryReminder,
 } from "../lib/habit-reminders.js";
+import { deliverReminder } from "../lib/deliver-notification.js";
 import { NTFY_TOPIC } from "../lib/notification-types.js";
-import { sendNtfyNotification } from "../lib/ntfy.js";
 import { formatTimeDisplay, normalizeTimeValue } from "../lib/time-utils.js";
 
 type TestBody = {
@@ -46,16 +46,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `\n\nScheduled for ${formatTimeDisplay(normalizedTime)}.`
         : "";
 
-      await sendNtfyNotification(payload.title, `${payload.body}${scheduleNote}`, { tags: payload.tags });
-      return res.status(200).json({ ok: true, topic: NTFY_TOPIC, variant, habitName });
+      const delivered = await deliverReminder(payload.title, `${payload.body}${scheduleNote}`, {
+        tags: payload.tags,
+        skipLog: true,
+      });
+
+      return res.status(200).json({
+        ok: true,
+        topic: NTFY_TOPIC,
+        variant,
+        habitName,
+        delivered,
+      });
     }
 
-    await sendNtfyNotification(
+    const delivered = await deliverReminder(
       "✅ Tracker",
-      "Reminders are working! Subscribe to topic Tracker in the ntfy app if you have not already.",
-      { tags: "white_check_mark" }
+      "Reminders are working! Subscribe to topic Tracker in the ntfy app or enable browser notifications.",
+      { tags: "white_check_mark", skipLog: true }
     );
-    return res.status(200).json({ ok: true, topic: NTFY_TOPIC, url: `https://ntfy.sh/${NTFY_TOPIC}` });
+
+    return res.status(200).json({
+      ok: true,
+      topic: NTFY_TOPIC,
+      url: `https://ntfy.sh/${NTFY_TOPIC}`,
+      delivered,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to send notification";
     console.error("ntfy test error:", err);

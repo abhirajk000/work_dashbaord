@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { neon } from "@neondatabase/serverless";
 import { buildHabitReminderSchedule } from "../lib/habit-reminders.js";
+import { deliverReminder } from "../lib/deliver-notification.js";
 import { NTFY_TOPIC, GREEN_PERCENT, normalizeNotificationSettings } from "../lib/notification-types.js";
-import { sendNtfyNotification } from "../lib/ntfy.js";
 import { getDateInTimezone, shouldFireReminderInWindow } from "../lib/reminder-window.js";
 
 const ROW_ID = "default";
@@ -39,10 +39,6 @@ function isCronAuthorized(req: VercelRequest): boolean {
   }
   if (!cronSecret) return process.env.NODE_ENV !== "production";
   return false;
-}
-
-async function sendNtfy(title: string, body: string, tags = "bell"): Promise<void> {
-  await sendNtfyNotification(title, body, { tags });
 }
 
 function isTrackingDate(date: string): boolean {
@@ -107,25 +103,6 @@ async function setLastCronRun(now: Date): Promise<void> {
   `;
 }
 
-async function alreadySent(kind: string, date: string): Promise<boolean> {
-  const sql = getSql();
-  const rows = await sql`
-    SELECT 1 FROM notification_log
-    WHERE topic = ${NTFY_TOPIC} AND kind = ${kind} AND reminder_date = ${date}
-    LIMIT 1
-  `;
-  return (rows as unknown[]).length > 0;
-}
-
-async function markSent(kind: string, date: string): Promise<void> {
-  const sql = getSql();
-  await sql`
-    INSERT INTO notification_log (topic, kind, reminder_date)
-    VALUES (${NTFY_TOPIC}, ${kind}, ${date})
-    ON CONFLICT (topic, kind, reminder_date) DO NOTHING
-  `;
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   if (req.method !== "GET" && req.method !== "POST") {
@@ -162,10 +139,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const trySend = async (kind: string, time: string, title: string, body: string, tags: string) => {
       if (!shouldFireReminderInWindow(time, timezone, windowStart, now)) return;
-      if (await alreadySent(kind, today)) return;
-      await sendNtfy(title, body, tags);
-      await markSent(kind, today);
-      sent += 1;
+      const delivered = await deliverReminder(title, body, {
+        tags,
+        kind,
+        logDate: today,
+        tag: kind,
+      });
+      if (delivered.ntfy) sent += 1;
+      if (delivered.webPush) sent += 1;
     };
 
     if (settings.morningEnabled) {

@@ -1,7 +1,5 @@
-import { neon } from "@neondatabase/serverless";
 import { buildHabitReminderSchedule } from "./habit-reminders.js";
-import { NTFY_TOPIC } from "./notification-types.js";
-import { sendNtfyNotification } from "./ntfy.js";
+import { deliverNtfyReminder } from "./deliver-notification.js";
 import { getDateInTimezone, zonedDateTimeToUtc } from "./reminder-window.js";
 
 const DATA_START_DATE = "2026-01-12";
@@ -34,12 +32,6 @@ type Habit = {
   reminderTimes?: string[];
 };
 
-function getSql() {
-  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) throw new Error("DATABASE_URL or POSTGRES_URL is not set");
-  return neon(url);
-}
-
 function isTrackingDate(date: string): boolean {
   return date >= DATA_START_DATE;
 }
@@ -49,25 +41,6 @@ function isHabitActiveOnDate(habit: Habit, date: string): boolean {
   if (habit.createdAt > date) return false;
   if (habit.deletedAt && date >= habit.deletedAt) return false;
   return true;
-}
-
-async function alreadyScheduled(kind: string, date: string): Promise<boolean> {
-  const sql = getSql();
-  const rows = await sql`
-    SELECT 1 FROM notification_log
-    WHERE topic = ${NTFY_TOPIC} AND kind = ${kind} AND reminder_date = ${date}
-    LIMIT 1
-  `;
-  return (rows as unknown[]).length > 0;
-}
-
-async function markScheduled(kind: string, date: string): Promise<void> {
-  const sql = getSql();
-  await sql`
-    INSERT INTO notification_log (topic, kind, reminder_date)
-    VALUES (${NTFY_TOPIC}, ${kind}, ${date})
-    ON CONFLICT (topic, kind, reminder_date) DO NOTHING
-  `;
 }
 
 export async function scheduleUpcomingHabitReminders(
@@ -93,16 +66,16 @@ export async function scheduleUpcomingHabitReminders(
           const leadMs = fireAt.getTime() - now.getTime();
           if (leadMs < MIN_SCHEDULE_LEAD_MS || leadMs > MAX_SCHEDULE_AHEAD_MS) continue;
 
-          if (await alreadyScheduled(reminder.kind, date)) continue;
-
           const delayUnix = String(Math.floor(fireAt.getTime() / 1000));
-          await sendNtfyNotification(reminder.title, reminder.body, {
+          const sent = await deliverNtfyReminder(reminder.title, reminder.body, {
             tags: reminder.tags,
             delay: delayUnix,
             sequenceId: `${reminder.kind}-${date}`,
+            kind: reminder.kind,
+            logDate: date,
           });
-          await markScheduled(reminder.kind, date);
-          scheduled += 1;
+
+          if (sent) scheduled += 1;
         }
       } catch (err) {
         errors.push(`${habit.name}@${reminder.time}: ${String(err)}`);
