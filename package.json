@@ -6,6 +6,7 @@
     "dev": "vite",
     "dev:full": "vercel dev",
     "db:migrate": "node scripts/migrate-schema.mjs",
+    "db:migrate:ntfy": "node scripts/migrate-ntfy.mjs",
     "setup:neon": "bash scripts/setup-neon.sh",
     "build": "tsc -b && vite build",
     "preview": "vite preview"

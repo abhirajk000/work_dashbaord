@@ -10,7 +10,7 @@ if (!url) {
 }
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const schema = readFileSync(join(root, "sql", "schema.sql"), "utf8");
+const schema = readFileSync(join(root, "sql", "migrate-ntfy.sql"), "utf8");
 const sql = neon(url);
 
 const statements = schema
@@ -23,4 +23,4 @@ for (const statement of statements) {
   await sql.query(statement);
 }
 
-console.log(`Schema applied successfully (${statements.length} statements).`);
+console.log(`ntfy migration applied (${statements.length} statements).`);

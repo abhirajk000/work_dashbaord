@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import localforage from "localforage";
-import { fetchDashboardState, saveDashboardStateRemote } from "./src/lib/dashboard-api";
+import { fetchDashboardState, saveDashboardStateKeepalive, saveDashboardStateRemote } from "./src/lib/dashboard-api";
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  normalizeNotificationSettings,
+  type NotificationSettings,
+} from "./lib/notification-types";
+import { formatTimeDisplay, normalizeReminderTimes, normalizeTimeValue, sortReminderTimes } from "./lib/time-utils";
+import {
+  getDeviceTimezone,
+  NTFY_SUBSCRIBE_URL,
+  sendHabitReminderTest,
+  sendTestNtfyNotification,
+} from "./src/lib/ntfy-notifications";
 import {
   Check,
   Plus,
@@ -17,6 +29,10 @@ import {
   Flame,
   Palette,
   Pencil,
+  X,
+  Bell,
+  BellRing,
+  Clock,
 } from "lucide-react";
 
 const GREEN_PERCENT = 70;
@@ -49,6 +65,8 @@ type Habit = {
   completions: Record<DateStr, boolean>;
   createdAt: DateStr;
   deletedAt?: DateStr;
+  /** 24h HH:mm — ntfy pings at each time until the habit is done today */
+  reminderTimes?: string[];
 };
 
 type WeekDay = {
@@ -101,6 +119,11 @@ type DashboardState = {
   weekStart: DateStr;
   themeId?: ThemeId;
   customAccent?: string;
+  /** When set to today, user-picked theme overrides the daily auto theme. */
+  themeManualDate?: DateStr;
+  notifications?: NotificationSettings;
+  /** Effective study hours logged per date. */
+  studyHours?: Record<DateStr, number>;
 };
 
 type LegacyHabit = {
@@ -111,7 +134,19 @@ type LegacyHabit = {
   deletedAt?: DateStr;
 };
 
-const HABIT_EPOCH: DateStr = "2000-01-01";
+/** First day habit tracking counts — dates before this show "No data yet". */
+const DATA_START_DATE: DateStr = "2026-01-12";
+const HABIT_EPOCH: DateStr = DATA_START_DATE;
+
+const LEGACY_DUMMY_HABIT_IDS = new Set(["habit-0", "habit-1", "habit-2", "habit-3", "habit-4", "habit-5"]);
+const LEGACY_DUMMY_HABIT_NAMES = new Set([
+  "Wake up at 6:30",
+  "Gym / Weight Training",
+  "Grammar & English Drill",
+  "Deep Work",
+  "Check SIPs & Budget",
+  "No sugar",
+]);
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -148,6 +183,58 @@ const THEME_PRESETS: ThemePresetDef[] = [
 
 const DEFAULT_THEME_ID: ThemeId = "green";
 const DEFAULT_CUSTOM_ACCENT = "#22c55e";
+
+/** Rotating glass accents — one per calendar day (IST). */
+const DAILY_GLASS_ACCENTS = [
+  "#6366f1",
+  "#8b5cf6",
+  "#3b82f6",
+  "#0ea5e9",
+  "#06b6d4",
+  "#14b8a6",
+  "#10b981",
+  "#22c55e",
+  "#84cc16",
+  "#eab308",
+  "#f97316",
+  "#f43f5e",
+  "#ec4899",
+  "#d946ef",
+] as const;
+
+type ResolvedTheme = {
+  themeId: ThemeId;
+  customAccent: string;
+  mode: ThemeMode;
+  isDaily: boolean;
+};
+
+function getDaysSinceEpoch(date: DateStr): number {
+  const [y, m, d] = date.split("-").map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
+}
+
+function getDailyTheme(date: DateStr = getTodayStr()): ResolvedTheme {
+  const accent = DAILY_GLASS_ACCENTS[getDaysSinceEpoch(date) % DAILY_GLASS_ACCENTS.length];
+  return { themeId: "custom", customAccent: accent, mode: "glass", isDaily: true };
+}
+
+function resolveActiveTheme(
+  today: DateStr,
+  themeId: ThemeId,
+  customAccent: string,
+  themeManualDate?: DateStr | null
+): ResolvedTheme {
+  if (themeManualDate === today) {
+    return {
+      themeId,
+      customAccent,
+      mode: resolveThemeMode(themeId),
+      isDaily: false,
+    };
+  }
+  return getDailyTheme(today);
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const h = hex.replace("#", "");
@@ -257,15 +344,26 @@ function buildDarkPaletteFromAccent(accent: string): ThemePalette {
 
 function buildGlassPaletteFromAccent(accent: string): ThemePalette {
   const light = buildPaletteFromAccent(accent);
+  const white = { r: 255, g: 255, b: 255 };
+  const base = hexToRgb(accent);
+  const shades = {
+    ...light.shades,
+    50: rgbToHex(mixRgb(white, base, 0.04)),
+    100: rgbToHex(mixRgb(white, base, 0.07)),
+    200: rgbToHex(mixRgb(white, base, 0.12)),
+  };
   return {
     ...light,
-    pageBg: rgbToHex(mixRgb(hexToRgb(accent), { r: 248, g: 250, b: 252 }, 0.04)),
-    pageGlow1: rgba(light.shades[500], 0.22),
-    pageGlow2: rgba(light.shades[400], 0.16),
-    pageGrid: rgba(light.shades[500], 0.04),
-    panelShadow: rgba(light.shades[700], 0.1),
-    surface: "rgba(255, 255, 255, 0.38)",
-    surfaceMuted: "rgba(255, 255, 255, 0.24)",
+    shades,
+    pageBg: "#ffffff",
+    pageGlow1: rgba(accent, 0.09),
+    pageGlow2: rgba(accent, 0.05),
+    pageGrid: "transparent",
+    panelShadow: "rgba(0, 0, 0, 0.06)",
+    surface: "rgba(255, 255, 255, 0.78)",
+    surfaceMuted: "rgba(255, 255, 255, 0.58)",
+    habitLabel: "#1c1c1e",
+    habitDone: "#8e8e93",
   };
 }
 
@@ -288,17 +386,22 @@ function resolveThemeMode(themeId: ThemeId): ThemeMode {
   return resolveThemePreset(themeId)?.mode ?? "light";
 }
 
-function buildThemePalette(themeId: ThemeId, customAccent: string): ThemePalette {
-  const accent = resolveThemeAccent(themeId, customAccent);
-  const mode = resolveThemeMode(themeId);
+function resolveThemeAccentForMode(themeId: ThemeId, customAccent: string, mode: ThemeMode): string {
+  if (themeId === "custom" || mode === "glass") return customAccent;
+  return resolveThemeAccent(themeId, customAccent);
+}
+
+function buildThemePalette(themeId: ThemeId, customAccent: string, mode: ThemeMode): ThemePalette {
+  const accent = resolveThemeAccentForMode(themeId, customAccent, mode);
   if (mode === "dark") return buildDarkPaletteFromAccent(accent);
   if (mode === "glass") return buildGlassPaletteFromAccent(accent);
   return buildPaletteFromAccent(accent);
 }
 
-function applyTheme(themeId: ThemeId, customAccent: string) {
-  const palette = buildThemePalette(themeId, customAccent);
-  const mode = resolveThemeMode(themeId);
+function applyTheme(themeId: ThemeId, customAccent: string, modeOverride?: ThemeMode) {
+  const mode = modeOverride ?? resolveThemeMode(themeId);
+  const accent = resolveThemeAccentForMode(themeId, customAccent, mode);
+  const palette = buildThemePalette(themeId, customAccent, mode);
   const root = document.documentElement;
 
   for (const [shade, color] of Object.entries(palette.shades)) {
@@ -315,31 +418,21 @@ function applyTheme(themeId: ThemeId, customAccent: string) {
   root.style.setProperty("--surface-muted", palette.surfaceMuted);
   palette.dots.forEach((color, i) => root.style.setProperty(`--th-dot-${i}`, color));
 
+  root.style.setProperty("--glass-accent-tint", rgba(accent, mode === "glass" ? 0.07 : 0.14));
+  root.style.setProperty("--glass-accent-glow", rgba(accent, mode === "glass" ? 0.11 : 0.32));
+  root.style.setProperty("--glass-accent-edge", rgba(accent, mode === "glass" ? 0.14 : 0.2));
+
+  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeColorMeta) {
+    themeColorMeta.setAttribute("content", mode === "glass" ? "#ffffff" : palette.pageBg);
+  }
+
   root.dataset.themeMode = mode;
   root.classList.toggle("theme-dark", mode === "dark");
   root.classList.toggle("theme-glass", mode === "glass");
 }
 
-const DEFAULT_HABITS: Habit[] = [
-  "Wake up at 6:30",
-  "Gym / Weight Training",
-  "Grammar & English Drill",
-  "Deep Work",
-  "Check SIPs & Budget",
-  "No sugar",
-].map((name, i) => ({ id: `habit-${i}`, name, completions: {}, createdAt: HABIT_EPOCH }));
-
-function getDefaultWeekStart(): DateStr {
-  return getWeekStartForDate(getTodayStr());
-}
-
-const DEFAULT_STATE: DashboardState = {
-  habits: DEFAULT_HABITS,
-  weeklyFocus: "Finish frontend UI and review components.",
-  reward: "Movie night, no guilt.",
-  affirmation: "Progress over perfection.",
-  weekStart: getDefaultWeekStart(),
-};
+const DEFAULT_HABITS: Habit[] = [];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -413,8 +506,37 @@ function formatMonthShortIST(dateStr: DateStr): string {
   });
 }
 
+function isTrackingDate(date: DateStr): boolean {
+  return date >= DATA_START_DATE;
+}
+
 function isEditableDate(date: DateStr): boolean {
   return date === getTodayStr();
+}
+
+function isStudyHoursEditable(date: DateStr): boolean {
+  return isTrackingDate(date) && !isFutureDate(date);
+}
+
+function normalizeStudyHoursValue(raw: number): number {
+  if (!Number.isFinite(raw)) return 0;
+  return Math.round(Math.max(0, Math.min(24, raw)) * 4) / 4;
+}
+
+function sanitizeStudyHours(map: Record<DateStr, number> | undefined): Record<DateStr, number> {
+  if (!map) return {};
+  const next: Record<DateStr, number> = {};
+  for (const [date, hours] of Object.entries(map)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isTrackingDate(date)) continue;
+    const normalized = normalizeStudyHoursValue(hours);
+    if (normalized > 0) next[date] = normalized;
+  }
+  return next;
+}
+
+function formatStudyHoursLabel(hours: number): string {
+  if (Number.isInteger(hours)) return `${hours}h`;
+  return `${hours}h`;
 }
 
 function isPastDate(date: DateStr): boolean {
@@ -434,6 +556,18 @@ function getWeekStartForDate(date: DateStr): DateStr {
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   return addDays(date, diffToMonday);
 }
+
+function getDefaultWeekStart(): DateStr {
+  return getWeekStartForDate(getTodayStr());
+}
+
+const DEFAULT_STATE: DashboardState = {
+  habits: DEFAULT_HABITS,
+  weeklyFocus: "",
+  reward: "",
+  affirmation: "",
+  weekStart: getDefaultWeekStart(),
+};
 
 function dateFromMonthDay(year: number, month: number, dayOfMonth: number): DateStr {
   return dateStrFromParts(year, month + 1, dayOfMonth);
@@ -484,7 +618,16 @@ function inferCreatedAt(h: LegacyHabit): DateStr {
   return HABIT_EPOCH;
 }
 
+function isLegacyDummyHabit(habit: Habit): boolean {
+  return (
+    LEGACY_DUMMY_HABIT_IDS.has(habit.id) &&
+    LEGACY_DUMMY_HABIT_NAMES.has(habit.name) &&
+    !Object.keys(habit.completions).some((d) => isTrackingDate(d) && habit.completions[d])
+  );
+}
+
 function isHabitActiveOnDate(habit: Habit, date: DateStr): boolean {
+  if (!isTrackingDate(date)) return false;
   if (habit.createdAt > date) return false;
   if (habit.deletedAt && date >= habit.deletedAt) return false;
   return true;
@@ -498,10 +641,25 @@ function normalizeHabit(h: Habit): Habit {
   const createdAt = h.createdAt ?? HABIT_EPOCH;
   const completions = { ...h.completions };
   for (const d of Object.keys(completions)) {
-    if (d < createdAt) delete completions[d];
+    if (d < createdAt || !isTrackingDate(d)) delete completions[d];
     if (h.deletedAt && d >= h.deletedAt) delete completions[d];
   }
-  return { ...h, createdAt, completions };
+  const reminderTimes = normalizeReminderTimes(h.reminderTimes);
+  return { ...h, createdAt, completions, reminderTimes: reminderTimes.length ? reminderTimes : undefined };
+}
+
+function defaultReminderTimesForIndex(_index: number): string[] {
+  return ["08:00"];
+}
+
+function sanitizeLoadedHabits(habits: Habit[]): Habit[] {
+  return habits
+    .filter((h) => !isLegacyDummyHabit(h))
+    .map((h) => {
+      const createdAt =
+        h.createdAt && h.createdAt < DATA_START_DATE ? DATA_START_DATE : (h.createdAt ?? DATA_START_DATE);
+      return normalizeHabit({ ...h, createdAt });
+    });
 }
 
 function migrateHabits(habits: LegacyHabit[], weekStart: DateStr): Habit[] {
@@ -510,23 +668,25 @@ function migrateHabits(habits: LegacyHabit[], weekStart: DateStr): Habit[] {
     LEGACY_DAY_KEYS.map((k, i) => [k, weekDays[i].date])
   ) as Record<LegacyDayKey, DateStr>;
 
-  return habits.map((h) => {
-    const createdAt = inferCreatedAt(h);
-    if (!isLegacyHabit(h)) {
-      return normalizeHabit({
-        id: h.id,
-        name: h.name,
-        completions: { ...h.completions },
-        createdAt,
-        deletedAt: h.deletedAt,
-      });
-    }
-    const completions: Record<DateStr, boolean> = {};
-    for (const [key, val] of Object.entries(h.completions)) {
-      if (val && key in keyToDate) completions[keyToDate[key as LegacyDayKey]] = true;
-    }
-    return normalizeHabit({ id: h.id, name: h.name, completions, createdAt, deletedAt: h.deletedAt });
-  });
+  return sanitizeLoadedHabits(
+    habits.map((h) => {
+      const createdAt = inferCreatedAt(h);
+      if (!isLegacyHabit(h)) {
+        return normalizeHabit({
+          id: h.id,
+          name: h.name,
+          completions: { ...h.completions },
+          createdAt,
+          deletedAt: h.deletedAt,
+        });
+      }
+      const completions: Record<DateStr, boolean> = {};
+      for (const [key, val] of Object.entries(h.completions)) {
+        if (val && key in keyToDate) completions[keyToDate[key as LegacyDayKey]] = true;
+      }
+      return normalizeHabit({ id: h.id, name: h.name, completions, createdAt, deletedAt: h.deletedAt });
+    })
+  );
 }
 
 function getHabitsForDate(habits: Habit[], date: DateStr): Habit[] {
@@ -572,7 +732,7 @@ function countPerfectDaysInMonth(habits: Habit[], year: number, month: number): 
   let count = 0;
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = dateStrFromParts(year, month + 1, day);
-    if (dateStr > today) break;
+    if (dateStr > today || !isTrackingDate(dateStr)) continue;
     if (isPerfectDay(habits, dateStr)) count++;
   }
   return count;
@@ -580,13 +740,14 @@ function countPerfectDaysInMonth(habits: Habit[], year: number, month: number): 
 
 function countPerfectDaysInWeek(habits: Habit[], weekDays: WeekDay[]): number {
   const today = getTodayStr();
-  return weekDays.filter((d) => d.date <= today && isPerfectDay(habits, d.date)).length;
+  return weekDays.filter((d) => d.date <= today && isTrackingDate(d.date) && isPerfectDay(habits, d.date)).length;
 }
 
 function getWeeklyAverage(habits: Habit[], weekDays: WeekDay[]): number {
-  if (habits.length === 0) return 0;
-  const total = weekDays.reduce((sum, d) => sum + getDayCompletionPercent(habits, d.date), 0);
-  return Math.round(total / weekDays.length);
+  const tracked = weekDays.filter((d) => isTrackingDate(d.date));
+  if (tracked.length === 0 || habits.length === 0) return 0;
+  const total = tracked.reduce((sum, d) => sum + getDayCompletionPercent(habits, d.date), 0);
+  return Math.round(total / tracked.length);
 }
 
 function getTotalCompletions(habits: Habit[], weekDays: WeekDay[]): number {
@@ -635,7 +796,7 @@ function getMonthBarStats(habits: Habit[], year: number, month: number): MonthBa
     totals.push(active);
     labels.push(String(day));
     totalChecks += done;
-    if (dateStr <= today) {
+    if (dateStr <= today && isTrackingDate(dateStr)) {
       daysElapsed++;
       if (active > 0) percentSum += getDayCompletionPercent(habits, dateStr);
       if (isDayQualified(habits, dateStr)) greenDays++;
@@ -729,7 +890,7 @@ function collectQualifiedDates(habits: Habit[]): Set<DateStr> {
   }
   const qualified = new Set<DateStr>();
   for (const d of dates) {
-    if (isDayQualified(habits, d)) qualified.add(d);
+    if (isTrackingDate(d) && isDayQualified(habits, d)) qualified.add(d);
   }
   return qualified;
 }
@@ -827,6 +988,7 @@ function getMonthCalDayStatus(
   todayStr: DateStr
 ): MonthCalDayStatus {
   if (isFutureDate(cell.date)) return "future";
+  if (!isTrackingDate(cell.date)) return "neutral";
   if (cell.date === todayStr) return "today";
   if (isPerfectDay(habits, cell.date)) return "perfect";
   if (isDayQualified(habits, cell.date)) return "qualified";
@@ -1046,6 +1208,197 @@ function DayRing({
   );
 }
 
+function StudyHoursPopup({
+  date,
+  initialHours,
+  onSave,
+  onClose,
+}: {
+  date: DateStr;
+  initialHours?: number;
+  onSave: (hours: number | null) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(initialHours !== undefined ? String(initialHours) : "");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const handleSave = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      onSave(null);
+      onClose();
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isNaN(parsed)) return;
+    onSave(normalizeStudyHoursValue(parsed));
+    onClose();
+  };
+
+  return createPortal(
+    <div className="study-hours-overlay fixed inset-0 z-[10070] flex items-end justify-center p-3 sm:items-center">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/35 backdrop-blur-[1px]"
+        onClick={onClose}
+        aria-label="Close"
+      />
+      <div
+        className="study-hours-popup panel relative z-10 w-full max-w-[280px] rounded-2xl border border-th-100-80 p-4 shadow-2xl"
+        role="dialog"
+        aria-labelledby="study-hours-title"
+      >
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div>
+            <h3 id="study-hours-title" className="text-sm font-extrabold text-th-800">
+              Effective study
+            </h3>
+            <p className="mt-0.5 text-[11px] font-medium text-th-500">{formatDateTip(date)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-th-500 hover:bg-th-50"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <label className="mb-3 block">
+          <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-th-500">
+            Hours studied
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              type="number"
+              min={0}
+              max={24}
+              step={0.25}
+              inputMode="decimal"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSave();
+              }}
+              className="w-full rounded-xl border border-th-200 bg-white px-3 py-2.5 text-lg font-bold tabular-nums text-th-800 outline-none ring-th-300 focus:ring-2"
+              placeholder="0"
+            />
+            <span className="shrink-0 text-sm font-bold text-th-500">hr</span>
+          </div>
+        </label>
+
+        <div className="flex gap-2">
+          {initialHours !== undefined && initialHours > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                onSave(null);
+                onClose();
+              }}
+              className="rounded-xl border border-th-200 px-3 py-2 text-xs font-semibold text-th-600 hover:bg-th-50"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-xl border border-th-200 px-3 py-2 text-xs font-semibold text-th-600 hover:bg-th-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="flex-1 rounded-xl bg-grad-th-btn px-3 py-2 text-xs font-bold text-white shadow-sm"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function StudyHoursChip({
+  date,
+  hours,
+  locked,
+  onDark,
+  compact = false,
+  onSave,
+}: {
+  date: DateStr;
+  hours?: number;
+  locked: boolean;
+  onDark: boolean;
+  compact?: boolean;
+  onSave: (hours: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasHours = hours !== undefined && hours > 0;
+  const size = compact ? 26 : 28;
+
+  const openPopup = () => {
+    if (!locked) setOpen(true);
+  };
+
+  return (
+    <>
+      <div
+        className={`shrink-0 rounded-full p-px ${
+          onDark ? "bg-white/15 ring-1 ring-white/30" : "bg-white/95 ring-1 ring-th-200"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={openPopup}
+          disabled={locked}
+          className={`study-hours-ring relative flex shrink-0 items-center justify-center rounded-full border transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
+            onDark
+              ? hasHours
+                ? "border-white/70 bg-white/20 text-white"
+                : "border-white/60 bg-white/15 text-white hover:bg-white/25"
+              : hasHours
+                ? "border-th-400 bg-white text-th-800"
+                : "border-th-300 bg-white text-th-500 hover:border-th-400"
+          }`}
+          style={{ width: size, height: size }}
+          title={locked ? "Study hours not editable" : hasHours ? `${formatStudyHoursLabel(hours!)} effective study` : "Log effective study hours"}
+          aria-label={hasHours ? `${formatStudyHoursLabel(hours!)} effective study` : "Log effective study hours"}
+        >
+          {hasHours ? (
+            <span className="text-[8px] font-extrabold leading-none tabular-nums">{formatStudyHoursLabel(hours!)}</span>
+          ) : (
+            <span className="text-[11px] font-extrabold leading-none">+</span>
+          )}
+        </button>
+      </div>
+      {open && (
+        <StudyHoursPopup
+          date={date}
+          initialHours={hours}
+          onSave={(value) => onSave(value)}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 function DayCardHeader({
   day,
   pct,
@@ -1055,6 +1408,9 @@ function DayCardHeader({
   isPast,
   isFuture,
   compact = false,
+  studyHours,
+  studyHoursLocked,
+  onStudyHoursSave,
 }: {
   day: WeekDay;
   pct: number;
@@ -1064,6 +1420,9 @@ function DayCardHeader({
   isPast: boolean;
   isFuture: boolean;
   compact?: boolean;
+  studyHours?: number;
+  studyHoursLocked: boolean;
+  onStudyHoursSave: (hours: number | null) => void;
 }) {
   const ringSize = compact ? 50 : 48;
   const palette = getDayPalette(day.dayIndex);
@@ -1137,8 +1496,16 @@ function DayCardHeader({
         </p>
       </div>
 
-      <div className="relative z-10 flex shrink-0 flex-col items-center gap-1">
-        {perfect && <PerfectDayCrown size={13} />}
+      <div className="relative z-10 flex shrink-0 items-center gap-1">
+        {perfect && <PerfectDayCrown size={13} className="absolute -top-1 right-0" aria-hidden />}
+        <StudyHoursChip
+          date={day.date}
+          hours={studyHours}
+          locked={studyHoursLocked}
+          onDark={isToday || perfect}
+          compact={compact}
+          onSave={onStudyHoursSave}
+        />
         <div
           className={`rounded-full p-0.5 ${
             isToday || perfect
@@ -1332,25 +1699,35 @@ function ProgressHero({
   );
 }
 
-function ProgressEmptyState({ isMonth }: { isMonth: boolean }) {
+function ProgressEmptyState({
+  isMonth,
+  beforeTracking = false,
+}: {
+  isMonth: boolean;
+  beforeTracking?: boolean;
+}) {
   const bars = isMonth ? [0.3, 0.5, 0.2, 0.6, 0.4, 0.7, 0.35] : [0.4, 0.65, 0.3, 0.55, 0.45, 0.7, 0.5];
 
   return (
     <div className="flex h-full min-h-[72px] flex-1 flex-col items-center justify-center gap-3 px-2 py-2">
-      <div className="flex h-16 w-full max-w-[200px] items-end justify-center gap-2">
-        {bars.map((h, i) => (
-          <div
-            key={i}
-            className="flex-1 rounded-t-md bg-th-100"
-            style={{ height: `${h * 100}%` }}
-          />
-        ))}
-      </div>
+      {!beforeTracking && (
+        <div className="flex h-16 w-full max-w-[200px] items-end justify-center gap-2">
+          {bars.map((h, i) => (
+            <div
+              key={i}
+              className="flex-1 rounded-t-md bg-th-100"
+              style={{ height: `${h * 100}%` }}
+            />
+          ))}
+        </div>
+      )}
       <div className="text-center">
         <p className="text-xs font-bold text-th-700">No data yet</p>
-        <p className="mt-0.5 max-w-[220px] text-[11px] leading-snug text-th-500">
-          Log today&apos;s habits to see your {isMonth ? "monthly" : "weekly"} trend
-        </p>
+        {!beforeTracking && (
+          <p className="mt-0.5 max-w-[220px] text-[11px] leading-snug text-th-500">
+            Log today&apos;s habits to see your {isMonth ? "monthly" : "weekly"} trend
+          </p>
+        )}
       </div>
     </div>
   );
@@ -1371,6 +1748,7 @@ function WeekScorePanel({
   streakCurrent,
   perfectDaysThisMonth,
   compact = false,
+  inSheet = false,
 }: {
   weeklyAvg: number;
   weekTotal: number;
@@ -1378,33 +1756,44 @@ function WeekScorePanel({
   streakCurrent: number;
   perfectDaysThisMonth: number;
   compact?: boolean;
+  inSheet?: boolean;
 }) {
-  const donutSize = compact ? 92 : 108;
+  const donutSize = inSheet ? 132 : compact ? 92 : 108;
   const onTrack = weeklyAvg >= GREEN_PERCENT;
 
   return (
     <div
-      className={`week-score-panel flex h-full w-full flex-col items-center justify-center text-center ${
-        compact ? "px-3 py-3" : "px-4 py-4"
+      className={`week-score-panel flex w-full flex-col items-center justify-center text-center ${
+        inSheet ? "px-1 py-1" : compact ? "h-full px-3 py-3" : "h-full px-4 py-4"
       }`}
     >
-      <div className="mb-2 flex items-center justify-center gap-1.5">
-        <span className="flex h-5 w-5 items-center justify-center rounded-md bg-th-100 text-th-600">
-          <BarChart3 size={12} strokeWidth={2.5} />
-        </span>
-        <p className="text-xs font-bold uppercase tracking-widest text-th-600">Week Score</p>
-      </div>
+      {!inSheet && (
+        <div className="mb-2 flex items-center justify-center gap-1.5">
+          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-th-100 text-th-600">
+            <BarChart3 size={12} strokeWidth={2.5} />
+          </span>
+          <p className="text-xs font-bold uppercase tracking-widest text-th-600">Week Score</p>
+        </div>
+      )}
 
-      <div className="relative mx-auto mb-3 flex items-center justify-center">
+      <div className={`relative mx-auto flex items-center justify-center ${inSheet ? "mb-2" : "mb-3"}`}>
         <div className="week-score-glow pointer-events-none absolute inset-0 rounded-full" aria-hidden />
         <DonutChart percent={weeklyAvg} size={donutSize} id={`week-score-panel${compact ? "-m" : ""}`} />
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span
-            className={`font-extrabold leading-none tabular-nums text-th-800 ${compact ? "text-2xl" : "text-3xl"}`}
+            className={`font-extrabold leading-none tabular-nums text-th-800 ${
+              inSheet ? "text-4xl" : compact ? "text-2xl" : "text-3xl"
+            }`}
           >
             {weeklyAvg}%
           </span>
-          <span className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-th-500">weekly avg</span>
+          <span
+            className={`mt-0.5 font-semibold uppercase tracking-wider text-th-500 ${
+              inSheet ? "text-xs" : "text-[10px]"
+            }`}
+          >
+            weekly avg
+          </span>
         </div>
       </div>
 
@@ -1426,14 +1815,14 @@ function WeekScorePanel({
         </p>
       </div>
 
-      <p className="mt-2 text-[11px] font-semibold text-th-700">
+      <p className={`text-[11px] font-semibold text-th-700 ${inSheet ? "mt-1" : "mt-2"}`}>
         {weekTotal}
         <span className="font-medium text-th-500"> / {weekMaxPossible} check-ins</span>
       </p>
       <p className="mt-0.5 text-[10px] font-medium text-th-500">{getWeekScoreMessage(weeklyAvg)}</p>
 
       {(streakCurrent > 0 || perfectDaysThisMonth > 0) && (
-        <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
+        <div className={`flex flex-wrap items-center justify-center gap-1.5 ${inSheet ? "mt-1.5" : "mt-2.5"}`}>
           {streakCurrent > 0 && (
             <span className="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-bold text-orange-600">
               <Flame size={11} className="text-orange-500" />
@@ -1454,7 +1843,7 @@ function WeekScorePanel({
 
 function OverallProgressPanel({
   view,
-  onToggleView,
+  onToggleView, 
   onPrevMonth,
   onNextMonth,
   onMonthBarClick,
@@ -1467,6 +1856,8 @@ function OverallProgressPanel({
   weekTotal,
   weekPerfectDays,
   weeklyAvg,
+  trackingDaysInView,
+  inSheet = false,
 }: {
   view: ProgressView;
   onToggleView: () => void;
@@ -1482,19 +1873,23 @@ function OverallProgressPanel({
   weekTotal: number;
   weekPerfectDays: number;
   weeklyAvg: number;
+  trackingDaysInView: boolean;
+  inSheet?: boolean;
 }) {
   const isMonth = view === "month";
-  const hasData = isMonth
+  const hasLoggedData = isMonth
     ? monthStats.totalChecks > 0
     : weekTotal > 0 || weekCounts.some((c) => c > 0);
+  const hasData = trackingDaysInView && hasLoggedData;
   const avg = isMonth ? monthStats.avgPercent : weeklyAvg;
   const perfectDays = isMonth ? monthStats.perfectDays : weekPerfectDays;
 
   return (
-    <div className="progress-panel flex min-h-0 flex-1 flex-col">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <PanelLabel icon={<BarChart3 size={10} />}>Progress</PanelLabel>
-        <div className="flex rounded-lg bg-th-100 p-0.5">
+    <div className={`progress-panel flex min-h-0 flex-col ${inSheet ? "gap-2" : "flex-1"}`}>
+      <div className={`flex items-center justify-between gap-2 ${inSheet ? "mb-0" : "mb-3"}`}>
+        {!inSheet && <PanelLabel icon={<BarChart3 size={10} />}>Progress</PanelLabel>}
+        {inSheet && <span className="text-[10px] font-bold uppercase tracking-wider text-th-500">View</span>}
+        <div className={`flex rounded-lg bg-th-100 p-0.5 ${inSheet ? "ml-auto" : ""}`}>
           <button
             type="button"
             onClick={() => !isMonth || onToggleView()}
@@ -1517,7 +1912,7 @@ function OverallProgressPanel({
       </div>
 
       {isMonth && (
-        <div className="mb-3 flex items-center justify-between rounded-lg border border-th-100-80 bg-th-50-40 px-1 py-0.5">
+        <div className={`flex items-center justify-between rounded-lg border border-th-100-80 bg-th-50-40 px-1 py-0.5 ${inSheet ? "mb-0" : "mb-3"}`}>
           <button
             type="button"
             onClick={onPrevMonth}
@@ -1538,15 +1933,17 @@ function OverallProgressPanel({
         </div>
       )}
 
-      <ProgressHero
-        avg={avg}
-        isMonth={isMonth}
-        weekTotal={weekTotal}
-        greenDays={monthStats.greenDays}
-        perfectDays={perfectDays}
-      />
+      {hasData && (
+        <ProgressHero
+          avg={avg}
+          isMonth={isMonth}
+          weekTotal={weekTotal}
+          greenDays={monthStats.greenDays}
+          perfectDays={perfectDays}
+        />
+      )}
 
-      <div className="mb-2 flex items-center justify-between px-0.5">
+      <div className={`flex items-center justify-between px-0.5 ${inSheet ? "mb-1" : "mb-2"}`}>
         <p className="text-[10px] font-bold uppercase tracking-wider text-th-500">
           {isMonth ? "Daily trend" : "This week"}
         </p>
@@ -1567,8 +1964,8 @@ function OverallProgressPanel({
         onKeyDown={hasData ? (e) => e.key === "Enter" && onToggleView() : undefined}
         title={hasData ? "Click chart to toggle week / month" : undefined}
       >
-        {!hasData ? (
-          <ProgressEmptyState isMonth={isMonth} />
+        {!trackingDaysInView || !hasData ? (
+          <ProgressEmptyState isMonth={isMonth} beforeTracking={!trackingDaysInView} />
         ) : isMonth ? (
           <MonthBarChart
             counts={monthStats.counts}
@@ -1680,6 +2077,145 @@ function TaskCheck({
   );
 }
 
+function HabitEmptySlot({ index }: { index: number }) {
+  return <div className="habit-slot-h habit-slot-empty shrink-0 rounded-md" aria-hidden data-slot={index} />;
+}
+
+function DayHabitSlots({
+  date,
+  habits,
+  locked,
+  onToggle,
+}: {
+  date: DateStr;
+  habits: Habit[];
+  locked: boolean;
+  onToggle: (habitId: string) => void;
+}) {
+  const tracking = isTrackingDate(date);
+  const dayHabits = useMemo(() => getHabitsForDate(habits, date), [habits, date]);
+  const overlayMessage = !tracking ? "No data yet" : dayHabits.length === 0 ? "No habits" : null;
+
+  return (
+    <div className="habit-slots-wrap shrink-0 p-1.5 md:p-1">
+      <div className="habit-slots-stack relative flex flex-col gap-px">
+        {Array.from({ length: MAX_HABITS }, (_, index) => {
+          const habit = tracking ? dayHabits[index] : undefined;
+          if (habit) {
+            return (
+              <TaskCheck
+                key={habit.id}
+                checked={isHabitDone(habit, date)}
+                locked={locked}
+                onToggle={() => onToggle(habit.id)}
+                label={habit.name}
+              />
+            );
+          }
+          return <HabitEmptySlot key={`empty-${index}`} index={index} />;
+        })}
+        {overlayMessage && (
+          <p className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-2 text-center text-xs font-bold text-th-500">
+            {overlayMessage}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Reminder time picker (visible label + native picker) ────────────────────
+
+function ReminderTimeField({
+  value,
+  onChange,
+  disabled = false,
+  size = "sm",
+  "aria-label": ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  size?: "sm" | "md";
+  "aria-label"?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const normalizedDraft = normalizeTimeValue(draft) ?? normalizeTimeValue(value) ?? value;
+  const normalizedValue = normalizeTimeValue(value) ?? value;
+  const dirty = normalizedDraft !== normalizedValue;
+  const display = formatTimeDisplay(dirty ? normalizedDraft : value);
+
+  const openPicker = () => {
+    if (disabled) return;
+    const input = inputRef.current;
+    if (!input) return;
+    try {
+      input.showPicker?.();
+    } catch {
+      input.click();
+    }
+    input.focus();
+  };
+
+  const handleDraftChange = (raw: string) => {
+    const normalized = normalizeTimeValue(raw);
+    if (normalized) setDraft(normalized);
+  };
+
+  const handleSave = () => {
+    const normalized = normalizeTimeValue(draft);
+    if (!normalized) return;
+    onChange(normalized);
+  };
+
+  return (
+    <span className="time-field relative inline-flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={openPicker}
+        disabled={disabled}
+        className={`time-field-btn rounded-md border border-th-200 bg-white font-semibold tabular-nums text-th-800 shadow-sm transition hover:border-th-300 hover:bg-th-50 disabled:cursor-not-allowed disabled:opacity-50 ${
+          dirty ? "border-th-400 ring-1 ring-th-300" : ""
+        } ${size === "md" ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]"}`}
+        aria-label={ariaLabel ?? `Reminder at ${display}`}
+      >
+        {display}
+      </button>
+      <input
+        ref={inputRef}
+        type="time"
+        step={60}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => handleDraftChange(e.target.value)}
+        onInput={(e) => handleDraftChange(e.currentTarget.value)}
+        className="time-field-native pointer-events-none absolute inset-0 opacity-0"
+        tabIndex={-1}
+        aria-hidden
+      />
+      {dirty && !disabled && (
+        <button
+          type="button"
+          onClick={handleSave}
+          className={`inline-flex shrink-0 items-center gap-0.5 rounded-md bg-grad-th-btn font-bold text-white shadow-sm transition hover:opacity-90 active:scale-95 ${
+            size === "md" ? "px-2 py-1 text-[11px]" : "px-1.5 py-0.5 text-[9px]"
+          }`}
+          aria-label={`Save reminder time ${display}`}
+        >
+          <Check size={size === "md" ? 12 : 9} strokeWidth={3} />
+          Save
+        </button>
+      )}
+    </span>
+  );
+}
+
 // ─── Habit master editor (collapsible) ───────────────────────────────────────
 
 function HabitMasterEditor({
@@ -1690,6 +2226,7 @@ function HabitMasterEditor({
   onAdd,
   canAdd,
   onUpdateName,
+  onUpdateReminders,
   onRemove,
   embedded = false,
   tabbed = false,
@@ -1701,11 +2238,27 @@ function HabitMasterEditor({
   onAdd: () => void;
   canAdd: boolean;
   onUpdateName: (id: string, name: string) => void;
+  onUpdateReminders: (id: string, reminderTimes: string[]) => void;
   onRemove: (id: string) => void;
   embedded?: boolean;
   tabbed?: boolean;
 }) {
   const habitsOpen = tabbed || open;
+  const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [testStatus, setTestStatus] = useState<string | null>(null);
+
+  const handleTestReminder = async (habitName: string, time: string, key: string) => {
+    setTestingKey(key);
+    setTestStatus(null);
+    try {
+      await sendHabitReminderTest({ habitName, time, variant: "primary" });
+      setTestStatus(`Test sent for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)} — check ntfy.`);
+    } catch (err) {
+      setTestStatus(err instanceof Error ? err.message : "Reminder test failed.");
+    } finally {
+      setTestingKey(null);
+    }
+  };
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col ${embedded ? "" : "shrink-0 border-t border-th-100"}`}>
@@ -1733,9 +2286,9 @@ function HabitMasterEditor({
       {habitsOpen && (
         <div className={`px-2 pb-2 pt-1 ${tabbed ? "flex min-h-0 flex-1 flex-col" : "border-t border-th-50"}`}>
           <p className="mb-2 shrink-0 text-[10px] leading-snug text-th-500">
-            Add, rename, or remove habits here. Check them off in the day columns below.
+            Set a reminder time for each habit — ntfy pings at that time, then again 30 min later if it's still unchecked. Tap the time, then Save. Use the bell to preview a reminder.
           </p>
-          <div className="mb-1 flex justify-end">
+          <div className="mb-1 flex shrink-0 justify-end">
             <button
               type="button"
               onClick={onAdd}
@@ -1751,36 +2304,109 @@ function HabitMasterEditor({
               Add habit
             </button>
           </div>
-          <div className="habit-slots-stack flex flex-col gap-px">
-            {getActiveHabits(habits).map((h, i) => (
+          <div className={`habit-editor-list flex flex-col gap-1.5 ${tabbed ? "min-h-0 flex-1 scroll-thin" : ""}`}>
+            {getActiveHabits(habits).map((h, i) => {
+              const times = h.reminderTimes ?? [];
+              return (
                 <div
                   key={h.id}
-                  className="group habit-slot-h flex items-center gap-2 rounded-md border border-th-100-60 bg-white/60 px-1.5 transition hover:border-th-200 hover:bg-white"
+                  className="group rounded-md border border-th-100-60 bg-white/60 px-2 py-1.5 transition hover:border-th-200 hover:bg-white"
                 >
-                  <span
-                    className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: `var(--th-dot-${i % 6})` }}
-                    aria-hidden
-                  />
-                  <input
-                    type="text"
-                    value={h.name}
-                    onChange={(e) => onUpdateName(h.id, e.target.value)}
-                    className="min-w-0 flex-1 bg-transparent text-xs font-medium text-habit-label outline-none md:text-[11px]"
-                    aria-label={`Edit habit name: ${h.name}`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onRemove(h.id)}
-                    className="touch-target flex shrink-0 items-center justify-center rounded p-1 text-th-400 transition active:bg-red-50 active:text-red-500 hover:bg-red-50 hover:text-red-400"
-                    aria-label={`Remove ${h.name}`}
-                  >
-                    <Trash2 size={12} className="md:h-[10px] md:w-[10px]" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: `var(--th-dot-${i % 6})` }}
+                      aria-hidden
+                    />
+                    <input
+                      type="text"
+                      value={h.name}
+                      onChange={(e) => onUpdateName(h.id, e.target.value)}
+                      className="min-w-0 flex-1 bg-transparent text-xs font-medium text-habit-label outline-none md:text-[11px]"
+                      aria-label={`Edit habit name: ${h.name}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onRemove(h.id)}
+                      className="touch-target flex shrink-0 items-center justify-center rounded p-1 text-th-400 transition active:bg-red-50 active:text-red-500 hover:bg-red-50 hover:text-red-400"
+                      aria-label={`Remove ${h.name}`}
+                    >
+                      <Trash2 size={12} className="md:h-[10px] md:w-[10px]" />
+                    </button>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-4">
+                    <Clock size={10} className="shrink-0 text-th-400" aria-hidden />
+                    {times.map((time, ti) => (
+                      <span
+                        key={`${h.id}-reminder-${ti}`}
+                        className="inline-flex items-center gap-0.5 rounded-full border border-th-100 bg-th-50/80 pl-1.5 pr-0.5"
+                      >
+                        <ReminderTimeField
+                          value={time}
+                          onChange={(normalized) => {
+                            const next = [...times];
+                            next[ti] = normalized;
+                            onUpdateReminders(h.id, sortReminderTimes(next));
+                          }}
+                          aria-label={`Reminder time ${ti + 1} for ${h.name}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleTestReminder(h.name, time, `${h.id}-${ti}`)}
+                          disabled={testingKey === `${h.id}-${ti}`}
+                          className="flex h-5 w-5 items-center justify-center rounded-full text-th-500 transition hover:bg-th-100 hover:text-th-700 disabled:opacity-50"
+                          aria-label={`Test reminder for ${h.name} at ${formatTimeDisplay(time)}`}
+                          title="Send test reminder"
+                        >
+                          <BellRing size={10} className={testingKey === `${h.id}-${ti}` ? "animate-pulse" : ""} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateReminders(h.id, times.filter((_, idx) => idx !== ti))}
+                          className="flex h-5 w-5 items-center justify-center rounded-full text-th-400 hover:bg-th-100 hover:text-th-600"
+                          aria-label={`Remove reminder ${time} for ${h.name}`}
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const used = new Set(times);
+                        const fallback = ["08:00", "12:00", "15:00", "18:00", "21:00"].find((t) => !used.has(t)) ?? "09:00";
+                        const nextTimes = sortReminderTimes([...times, fallback]);
+                        onUpdateReminders(h.id, nextTimes);
+                      }}
+                      className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-th-200 px-2 py-0.5 text-[10px] font-semibold text-th-600 hover:border-th-300 hover:bg-th-50"
+                    >
+                      <Plus size={10} />
+                      Reminder
+                    </button>
+                    {times.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextTimes = sortReminderTimes(["08:00"]);
+                          onUpdateReminders(h.id, nextTimes);
+                        }}
+                        className="inline-flex items-center gap-0.5 rounded-full border border-th-300 bg-th-50 px-2 py-0.5 text-[10px] font-semibold text-th-700 hover:bg-th-100"
+                      >
+                        <BellRing size={10} />
+                        Add 8:00 AM
+                      </button>
+                    )}
+                  </div>
                 </div>
-            ))}
+              );
+            })}
             {activeCount === 0 && (
               <p className="py-3 text-center text-xs text-th-400">No habits yet. Tap Add to get started.</p>
+            )}
+            {testStatus && (
+              <p className="mt-1 shrink-0 rounded-lg border border-th-100 bg-th-50/80 px-2 py-1.5 text-[10px] font-medium leading-snug text-th-600">
+                {testStatus}
+              </p>
             )}
           </div>
         </div>
@@ -1792,11 +2418,17 @@ function HabitMasterEditor({
 type ManagePanelView = "habits" | "activity";
 type MobileInsightsTab = "score" | "progress" | "manage";
 
+const MOBILE_INSIGHTS_TITLES: Record<MobileInsightsTab, string> = {
+  score: "Week Score",
+  progress: "Progress",
+  manage: "Habits",
+};
+
 function MobileInsightsTabs({
   active,
   onChange,
 }: {
-  active: MobileInsightsTab;
+  active: MobileInsightsTab | null;
   onChange: (tab: MobileInsightsTab) => void;
 }) {
   const tabs: { id: MobileInsightsTab; label: string; icon: React.ReactNode }[] = [
@@ -1806,27 +2438,96 @@ function MobileInsightsTabs({
   ];
 
   return (
-    <div className="mobile-insights-tabs mb-2 grid grid-cols-3 gap-1 rounded-xl border border-th-100-80 bg-[var(--surface-muted)] p-1">
+    <div className="mobile-insights-tabs grid grid-cols-3 gap-0.5 p-1" role="tablist" aria-label="Insights">
       {tabs.map((tab) => {
         const isActive = active === tab.id;
         return (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={isActive}
+            aria-expanded={isActive}
             onClick={() => onChange(tab.id)}
-            className={`flex min-h-[44px] flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[10px] font-bold transition active:scale-[0.98] ${
+            className={`flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 text-[10px] font-bold transition active:scale-[0.97] ${
               isActive
-                ? "bg-[var(--surface-color)] text-th-700 shadow-sm ring-1 ring-th-200"
+                ? "bg-[var(--surface-color)] text-th-800 shadow-sm"
                 : "text-th-500"
             }`}
-            aria-pressed={isActive}
           >
-            {tab.icon}
+            <span className={isActive ? "text-th-600" : "text-th-400"}>{tab.icon}</span>
             <span>{tab.label}</span>
           </button>
         );
       })}
     </div>
+  );
+}
+
+function MobileInsightsSheet({
+  tab,
+  onClose,
+  children,
+}: {
+  tab: MobileInsightsTab;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="mobile-insights-overlay fixed inset-x-0 top-0 z-[10050] flex flex-col justify-end"
+      style={{ bottom: "var(--mobile-dock-h)" }}
+      role="presentation"
+    >
+      <button
+        type="button"
+        className="mobile-insights-backdrop absolute inset-0 bg-black/40"
+        aria-label="Close panel"
+        onClick={onClose}
+      />
+      <div
+        className="mobile-insights-sheet relative z-10 flex flex-col overflow-hidden"
+        data-tab={tab}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-insights-sheet-title"
+      >
+        <div className="mobile-insights-sheet-grabber shrink-0 pt-2" aria-hidden>
+          <span className="mobile-insights-sheet-grabber-bar" />
+        </div>
+        <div className="mobile-insights-sheet-header flex shrink-0 items-center justify-between gap-2 px-4 pb-2 pt-0.5">
+          <h2 id="mobile-insights-sheet-title" className="text-[15px] font-extrabold tracking-tight text-th-800">
+            {MOBILE_INSIGHTS_TITLES[tab]}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-th-50 text-th-500 transition active:scale-95"
+            aria-label="Close"
+          >
+            <X size={17} strokeWidth={2.5} />
+          </button>
+        </div>
+        <div className="mobile-insights-sheet-body min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-thin px-3 pb-3 pt-1">
+          {children}
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1840,9 +2541,11 @@ function ManageHabitsActivityPanel({
   onAdd,
   canAdd,
   onUpdateName,
+  onUpdateReminders,
   onRemove,
   onDayClick,
   selectedDate,
+  inSheet = false,
 }: {
   view: ManagePanelView;
   onViewChange: (view: ManagePanelView) => void;
@@ -1853,9 +2556,11 @@ function ManageHabitsActivityPanel({
   onAdd: () => void;
   canAdd: boolean;
   onUpdateName: (id: string, name: string) => void;
+  onUpdateReminders: (id: string, reminderTimes: string[]) => void;
   onRemove: (id: string) => void;
   onDayClick: (date: DateStr) => void;
   selectedDate: DateStr | null;
+  inSheet?: boolean;
 }) {
   const tabClass = (active: boolean) =>
     `flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-md px-2 py-2 text-[10px] font-bold uppercase tracking-wide transition md:min-h-0 md:py-1.5 ${
@@ -1863,8 +2568,8 @@ function ManageHabitsActivityPanel({
     }`;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex shrink-0 gap-1 border-b border-th-100 px-2 py-2">
+    <div className={`flex min-h-0 flex-col overflow-hidden ${inSheet ? "" : "flex-1"}`}>
+      <div className={`flex shrink-0 gap-1 border-b border-th-100 px-1 py-1.5 ${inSheet ? "" : "px-2 py-2"}`}>
         <button type="button" className={tabClass(view === "habits")} onClick={() => onViewChange("habits")}>
           <Pencil size={11} />
           Habits ({activeCount})
@@ -1884,6 +2589,7 @@ function ManageHabitsActivityPanel({
           onAdd={onAdd}
           canAdd={canAdd}
           onUpdateName={onUpdateName}
+          onUpdateReminders={onUpdateReminders}
           onRemove={onRemove}
           embedded
           tabbed
@@ -1924,16 +2630,242 @@ function ThemeSwatch({ preset }: { preset: ThemePresetDef }) {
   );
 }
 
+const NOTIFICATION_MENU_WIDTH = 300;
+
+function NotificationPanel({
+  settings,
+  onChange,
+}: {
+  settings: NotificationSettings;
+  onChange: (next: NotificationSettings) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, bottom: undefined as number | undefined });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const updateMenuPos = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(NOTIFICATION_MENU_WIDTH, window.innerWidth - 16);
+    const mobile = window.innerWidth <= 767;
+    if (mobile) {
+      setMenuPos({
+        top: 0,
+        left: 8,
+        bottom: Math.max(8, parseInt(getComputedStyle(document.documentElement).getPropertyValue("--safe-bottom") || "0", 10) || 8),
+      });
+      return;
+    }
+    let left = rect.right - width;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    setMenuPos({ top: rect.bottom + 8, left, bottom: undefined });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPos();
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onReposition = () => updateMenuPos();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("resize", onReposition);
+    window.addEventListener("scroll", onReposition, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("resize", onReposition);
+      window.removeEventListener("scroll", onReposition, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, updateMenuPos]);
+
+  const patchSettings = (patch: Partial<NotificationSettings>) => {
+    onChange(
+      normalizeNotificationSettings({
+        ...settings,
+        ...patch,
+        timezone: getDeviceTimezone(),
+      })
+    );
+  };
+
+  const handleToggleEnabled = () => {
+    const next = !settings.enabled;
+    onChange(
+      normalizeNotificationSettings({
+        ...settings,
+        enabled: next,
+        timezone: getDeviceTimezone(),
+      })
+    );
+    setStatus(next ? "Reminders enabled." : "Reminders turned off.");
+  };
+
+  const handleTest = async () => {
+    setStatus(null);
+    setBusy(true);
+    try {
+      await sendTestNtfyNotification();
+      setStatus("Test sent to ntfy.sh/Tracker — check the ntfy app.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Test failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          if (!open) updateMenuPos();
+          setOpen((v) => !v);
+        }}
+        className={`notification-trigger flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition ${
+          open || settings.enabled
+            ? "border-th-400 bg-[var(--surface-color)] text-th-700 ring-2 ring-th-300"
+            : "border-th-200 bg-[var(--surface-color)] text-th-600 hover:border-th-300 hover:bg-th-50"
+        }`}
+        aria-label={settings.enabled ? "Reminders on" : "Reminders off"}
+        aria-expanded={open}
+        title="Habit reminders"
+      >
+        {settings.enabled ? <BellRing size={16} /> : <Bell size={16} />}
+      </button>
+
+      {open &&
+        createPortal(
+          <>
+            <div
+              className="notification-backdrop fixed inset-0 z-[9998] bg-black/30 md:hidden"
+              onClick={() => setOpen(false)}
+              aria-hidden
+            />
+            <div
+              ref={menuRef}
+              className="notification-menu fixed z-[9999] max-h-[min(78vh,520px)] overflow-y-auto rounded-2xl border border-th-200 bg-white p-3 shadow-2xl scroll-thin max-md:rounded-b-none max-md:border-b-0"
+              style={{
+                top: menuPos.bottom !== undefined ? undefined : menuPos.top,
+                bottom: menuPos.bottom,
+                left: menuPos.left,
+                width: Math.min(NOTIFICATION_MENU_WIDTH, window.innerWidth - 16),
+              }}
+              role="dialog"
+              aria-label="Notification settings"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-sm font-bold text-th-800">Habit reminders</p>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-th-500 hover:bg-th-50"
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <label className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-th-100 bg-th-50/80 px-3 py-2.5">
+                <span className="text-xs font-semibold text-th-700">Enable reminders</span>
+                <input
+                  type="checkbox"
+                  checked={settings.enabled}
+                  disabled={busy}
+                  onChange={handleToggleEnabled}
+                  className="h-4 w-4 accent-th-600"
+                />
+              </label>
+
+              <div className={`space-y-2.5 ${settings.enabled ? "" : "pointer-events-none opacity-50"}`}>
+                <label className="flex items-center justify-between gap-2 rounded-xl border border-th-100 px-3 py-2">
+                  <span className="text-xs font-medium text-th-700">Morning kickoff</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={settings.morningEnabled}
+                      disabled={busy}
+                      onChange={(e) => patchSettings({ morningEnabled: e.target.checked })}
+                      className="h-4 w-4 accent-th-600"
+                    />
+                    <ReminderTimeField
+                      value={settings.morningTime}
+                      disabled={busy || !settings.morningEnabled}
+                      size="md"
+                      onChange={(normalized) => patchSettings({ morningTime: normalized })}
+                    />
+                  </div>
+                </label>
+
+                <label className="flex items-center justify-between gap-2 rounded-xl border border-th-100 px-3 py-2">
+                  <span className="text-xs font-medium text-th-700">Evening nudge</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={settings.eveningEnabled}
+                      disabled={busy}
+                      onChange={(e) => patchSettings({ eveningEnabled: e.target.checked })}
+                      className="h-4 w-4 accent-th-600"
+                    />
+                    <ReminderTimeField
+                      value={settings.eveningTime}
+                      disabled={busy || !settings.eveningEnabled}
+                      size="md"
+                      onChange={(normalized) => patchSettings({ eveningTime: normalized })}
+                    />
+                  </div>
+                </label>
+
+            
+
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleTest()}
+                  className="w-full rounded-xl border border-th-200 bg-white px-3 py-2 text-xs font-semibold text-th-700 transition hover:bg-th-50 disabled:opacity-50"
+                >
+                  Send test notification
+                </button>
+                <p className="text-[10px] leading-snug text-th-500">
+                  Tap a time to change it, then Save. Subscribe to <strong>Tracker</strong> in the{" "}
+                  <a href={NTFY_SUBSCRIBE_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-th-700 underline">
+                    ntfy app
+                  </a>{" "}
+                  first. Use the bell on each habit reminder to preview that ping.
+                </p>
+              </div>
+
+              {status && <p className="mt-2 text-[11px] font-medium text-th-600">{status}</p>}
+            </div>
+          </>,
+          document.body
+        )}
+    </>
+  );
+}
+
 function ThemePicker({
   themeId,
   customAccent,
+  isDaily,
   onSelectPreset,
   onCustomAccent,
+  onUseDailyTheme,
 }: {
   themeId: ThemeId;
   customAccent: string;
+  isDaily: boolean;
   onSelectPreset: (id: ThemePresetId) => void;
   onCustomAccent: (hex: string) => void;
+  onUseDailyTheme: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, bottom: undefined as number | undefined });
@@ -1982,9 +2914,12 @@ function ThemePicker({
     };
   }, [open, updateMenuPos]);
 
-  const accent = resolveThemeAccent(themeId, customAccent);
-  const activeName =
-    themeId === "custom" ? "Custom" : (resolveThemePreset(themeId)?.name ?? "Theme");
+  const accent = isDaily ? customAccent : resolveThemeAccent(themeId, customAccent);
+  const activeName = isDaily
+    ? "Daily"
+    : themeId === "custom"
+      ? "Custom"
+      : (resolveThemePreset(themeId)?.name ?? "Theme");
   const presetGroups: { label: string; mode: ThemeMode }[] = [
     { label: "Light", mode: "light" },
     { label: "Glass", mode: "glass" },
@@ -2040,6 +2975,22 @@ function ThemePicker({
               <p className="text-xs font-bold uppercase tracking-wide text-th-800">Themes</p>
               <span className="truncate text-[10px] font-semibold text-th-500">{activeName}</span>
             </div>
+            {isDaily ? (
+              <p className="mb-3 rounded-lg border border-th-100-80 bg-th-50-40 px-2 py-1.5 text-[10px] leading-snug text-th-600">
+                A fresh glass palette is picked automatically each day.
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  onUseDailyTheme();
+                  setOpen(false);
+                }}
+                className="mb-3 w-full rounded-lg border border-th-200 bg-th-50-40 px-2 py-1.5 text-[10px] font-bold text-th-700 transition hover:bg-th-50"
+              >
+                Use today&apos;s daily theme
+              </button>
+            )}
             {presetGroups.map((group) => {
               const presets = THEME_PRESETS.filter((p) => p.mode === group.mode);
               if (presets.length === 0) return null;
@@ -2120,7 +3071,7 @@ function LoadingScreen() {
         <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-th-100 border-t-th-600" />
         <div className="absolute inset-0 m-auto h-3 w-3 rounded-full bg-th-500-30" />
       </div>
-      <p className="text-xs font-semibold text-th-700">Loading dashboard…</p>
+      <p className="text-xs font-semibold text-th-700">Loading Tracker…</p>
     </div>
   );
 }
@@ -2139,15 +3090,26 @@ export default function ProductivityDashboard() {
   const [focusedDate, setFocusedDate] = useState<DateStr | null>(null);
   const [habitsEditorOpen, setHabitsEditorOpen] = useState(true);
   const [managePanelView, setManagePanelView] = useState<ManagePanelView>("habits");
-  const [mobileInsightsTab, setMobileInsightsTab] = useState<MobileInsightsTab>("score");
-  const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
-  const [customAccent, setCustomAccent] = useState(DEFAULT_CUSTOM_ACCENT);
+  const [mobileInsightsSheet, setMobileInsightsSheet] = useState<MobileInsightsTab | null>(null);
+  const [themeId, setThemeId] = useState<ThemeId>(() => getDailyTheme().themeId);
+  const [customAccent, setCustomAccent] = useState(() => getDailyTheme().customAccent);
+  const [themeManualDate, setThemeManualDate] = useState<DateStr | null>(null);
+  const [notifications, setNotifications] = useState<NotificationSettings>(() => ({
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    timezone: getDeviceTimezone(),
+  }));
+  const [studyHours, setStudyHours] = useState<Record<DateStr, number>>({});
   const dayColumnsScrollRef = useRef<HTMLDivElement>(null);
   const isHydrated = useRef(false);
-  const saveTimerRef = useRef<number | null>(null);
+  const latestSnapshotRef = useRef<DashboardState | null>(null);
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "offline">("idle");
   const isMobile = useIsMobile();
   const todayStr = getTodayStr();
+  const activeTheme = useMemo(
+    () => resolveActiveTheme(todayStr, themeId, customAccent, themeManualDate),
+    [todayStr, themeId, customAccent, themeManualDate]
+  );
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
   const weekRange = useMemo(() => formatWeekRange(weekDays), [weekDays]);
   const todayIndex = useMemo(() => weekDays.findIndex((d) => d.date === todayStr), [weekDays, todayStr]);
@@ -2173,6 +3135,17 @@ export default function ProductivityDashboard() {
     return countPerfectDaysInMonth(habits, year, month);
   }, [habits]);
   const weekPerfectDays = useMemo(() => countPerfectDaysInWeek(habits, weekDays), [habits, weekDays]);
+  const weekTrackingDaysInView = useMemo(
+    () => weekDays.some((d) => isTrackingDate(d.date)),
+    [weekDays]
+  );
+  const monthTrackingDaysInView = useMemo(() => {
+    const daysInMonth = new Date(Date.UTC(progressMonth.year, progressMonth.month + 1, 0)).getUTCDate();
+    const monthEnd = dateStrFromParts(progressMonth.year, progressMonth.month + 1, daysInMonth);
+    return monthEnd >= DATA_START_DATE;
+  }, [progressMonth.year, progressMonth.month]);
+  const progressTrackingDaysInView =
+    progressView === "month" ? monthTrackingDaysInView : weekTrackingDaysInView;
 
   const focusDay = useCallback((date: DateStr) => {
     setWeekStart(getWeekStartForDate(date));
@@ -2215,17 +3188,20 @@ export default function ProductivityDashboard() {
       const loadedThemeId = normalizeThemeId(saved.themeId);
       const loadedAccent = saved.customAccent ?? DEFAULT_CUSTOM_ACCENT;
       setWeekStart(ws);
-      setHabits(saved.habits?.length ? migrateHabits(saved.habits as LegacyHabit[], ws) : DEFAULT_HABITS);
-      setWeeklyFocus(saved.weeklyFocus ?? DEFAULT_STATE.weeklyFocus);
-      setReward(saved.reward ?? DEFAULT_STATE.reward);
-      setAffirmation(saved.affirmation ?? DEFAULT_STATE.affirmation);
+      setHabits(
+        saved.habits?.length ? migrateHabits(saved.habits as LegacyHabit[], ws) : []
+      );
+      setWeeklyFocus(saved.weeklyFocus ?? "");
+      setReward(saved.reward ?? "");
+      setAffirmation(saved.affirmation ?? "");
       setThemeId(loadedThemeId);
       setCustomAccent(loadedAccent);
+      setThemeManualDate(saved.themeManualDate ?? null);
+      if (saved.notifications) {
+        setNotifications(normalizeNotificationSettings(saved.notifications));
+      }
+      setStudyHours(sanitizeStudyHours(saved.studyHours));
     }
-    applyTheme(
-      normalizeThemeId(saved?.themeId),
-      saved?.customAccent ?? DEFAULT_CUSTOM_ACCENT
-    );
   }, []);
 
   useEffect(() => {
@@ -2302,29 +3278,37 @@ export default function ProductivityDashboard() {
       weekStart,
       themeId,
       customAccent,
+      themeManualDate: themeManualDate ?? undefined,
+      notifications: normalizeNotificationSettings(notifications),
+      studyHours: sanitizeStudyHours(studyHours),
     };
 
-    localforage.setItem(STORAGE_KEY, snapshot).catch((err) => console.error("Failed to save locally:", err));
+    latestSnapshotRef.current = snapshot;
+    void localforage.setItem(STORAGE_KEY, snapshot).catch((err) => console.error("Failed to save locally:", err));
 
-    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      setSyncStatus("syncing");
-      saveDashboardStateRemote(snapshot)
-        .then(() => setSyncStatus("idle"))
-        .catch((err) => {
-          console.warn("Remote save failed:", err);
-          setSyncStatus("offline");
-        });
-    }, 600);
-
-    return () => {
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    };
-  }, [habits, weeklyFocus, reward, affirmation, weekStart, themeId, customAccent]);
+    setSyncStatus("syncing");
+    saveChainRef.current = saveChainRef.current
+      .catch(() => undefined)
+      .then(() => saveDashboardStateRemote(snapshot))
+      .then(() => setSyncStatus("idle"))
+      .catch((err) => {
+        console.warn("Remote save failed:", err);
+        setSyncStatus("offline");
+      });
+  }, [habits, weeklyFocus, reward, affirmation, weekStart, themeId, customAccent, themeManualDate, notifications, studyHours]);
 
   useEffect(() => {
-    applyTheme(themeId, customAccent);
-  }, [themeId, customAccent]);
+    const flushOnExit = () => {
+      const snapshot = latestSnapshotRef.current;
+      if (snapshot) saveDashboardStateKeepalive(snapshot);
+    };
+    window.addEventListener("pagehide", flushOnExit);
+    return () => window.removeEventListener("pagehide", flushOnExit);
+  }, []);
+
+  useEffect(() => {
+    applyTheme(activeTheme.themeId, activeTheme.customAccent, activeTheme.mode);
+  }, [activeTheme]);
 
   const toggleHabit = useCallback((habitId: string, date: DateStr) => {
     if (!isEditableDate(date)) return;
@@ -2343,11 +3327,40 @@ export default function ProductivityDashboard() {
     setHabits((prev) => prev.map((h) => (h.id === habitId ? { ...h, name } : h)));
   }, []);
 
+  const updateHabitReminders = useCallback((habitId: string, reminderTimes: string[]) => {
+    const sorted = sortReminderTimes(reminderTimes);
+    setHabits((prev) =>
+      prev.map((h) =>
+        h.id === habitId ? { ...h, reminderTimes: sorted.length ? sorted : undefined } : h
+      )
+    );
+  }, []);
+
+  const updateStudyHours = useCallback((date: DateStr, hours: number | null) => {
+    if (!isStudyHoursEditable(date)) return;
+    setStudyHours((prev) => {
+      const next = { ...prev };
+      if (hours === null || hours <= 0) delete next[date];
+      else next[date] = normalizeStudyHoursValue(hours);
+      return next;
+    });
+  }, []);
+
   const addHabit = useCallback(() => {
     const today = getTodayStr();
     setHabits((prev) => {
       if (getActiveHabits(prev).length >= MAX_HABITS) return prev;
-      return [...prev, { id: `habit-${Date.now()}`, name: "New habit", completions: {}, createdAt: today }];
+      const index = getActiveHabits(prev).length;
+      return [
+        ...prev,
+        {
+          id: `habit-${Date.now()}`,
+          name: "New habit",
+          completions: {},
+          createdAt: today,
+          reminderTimes: defaultReminderTimesForIndex(index),
+        },
+      ];
     });
   }, []);
 
@@ -2388,6 +3401,7 @@ export default function ProductivityDashboard() {
       weekTotal={totalDone}
       weekPerfectDays={weekPerfectDays}
       weeklyAvg={weeklyAvg}
+      trackingDaysInView={progressTrackingDaysInView}
     />
   );
 
@@ -2402,67 +3416,123 @@ export default function ProductivityDashboard() {
       onAdd={addHabit}
       canAdd={canAddHabit}
       onUpdateName={updateHabitName}
+      onUpdateReminders={updateHabitReminders}
       onRemove={removeHabit}
       onDayClick={focusDay}
       selectedDate={focusedDate}
     />
   );
 
-  const scorePanel = (
+  const scoreSheetPanel = (
     <WeekScorePanel
       weeklyAvg={weeklyAvg}
       weekTotal={totalDone}
       weekMaxPossible={weekMaxPossible}
       streakCurrent={streakStats.current}
       perfectDaysThisMonth={perfectDaysThisMonth}
-      compact={isMobile}
+      inSheet
+    />
+  );
+
+  const progressSheetPanel = (
+    <OverallProgressPanel
+      view={progressView}
+      onToggleView={() => setProgressView((v) => (v === "week" ? "month" : "week"))}
+      onPrevMonth={() => setProgressMonth((m) => shiftMonth(m.year, m.month, -1))}
+      onNextMonth={() => setProgressMonth((m) => shiftMonth(m.year, m.month, 1))}
+      onMonthBarClick={(dayOfMonth) =>
+        focusDay(dateFromMonthDay(progressMonth.year, progressMonth.month, dayOfMonth))
+      }
+      weekCounts={barCounts}
+      weekTotals={barTotals}
+      weekLabels={barLabels}
+      weekTodayIndex={todayIndex}
+      monthStats={monthBarStats}
+      maxHabits={maxActiveHabits}
+      weekTotal={totalDone}
+      weekPerfectDays={weekPerfectDays}
+      weeklyAvg={weeklyAvg}
+      trackingDaysInView={progressTrackingDaysInView}
+      inSheet
+    />
+  );
+
+  const manageSheetPanel = (
+    <ManageHabitsActivityPanel
+      view={managePanelView}
+      onViewChange={setManagePanelView}
+      activeCount={activeHabits.length}
+      habits={habits}
+      habitsEditorOpen={habitsEditorOpen}
+      onToggleHabitsEditor={() => setHabitsEditorOpen((v) => !v)}
+      onAdd={addHabit}
+      canAdd={canAddHabit}
+      onUpdateName={updateHabitName}
+      onUpdateReminders={updateHabitReminders}
+      onRemove={removeHabit}
+      onDayClick={focusDay}
+      selectedDate={focusedDate}
+      inSheet
     />
   );
 
   return (
-    <div className="dashboard-root bg-dashboard safe-pt safe-px safe-pb flex min-h-dvh flex-col font-sans text-th-900 md:h-full md:overflow-hidden">
+    <div className="dashboard-root bg-dashboard safe-pt safe-px max-md:pb-0 safe-pb flex min-h-dvh flex-col font-sans text-th-900 md:h-full md:overflow-hidden">
       {/* Title bar */}
-      <header className="dashboard-header sticky top-0 z-30 mb-2 flex shrink-0 flex-col gap-1.5 animate-fade-up md:static md:mb-1.5 md:flex-row md:items-center md:justify-between md:gap-2">
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-grad-th-icon shadow-md md:h-7 md:w-7">
-              <ListChecks size={15} className="text-white md:h-[14px] md:w-[14px]" />
-            </div>
+      <header className="dashboard-header home-header sticky top-0 z-30 mb-0 flex shrink-0 flex-col gap-2 animate-fade-up md:static md:mb-1.5 md:flex-row md:items-center md:justify-between md:gap-2">
+        <div className="home-header-top flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img
+              src="/logo.png"
+              alt=""
+              className="home-logo h-9 w-9 shrink-0 rounded-[10px] object-cover shadow-sm md:h-7 md:w-7"
+              width={36}
+              height={36}
+            />
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-extrabold tracking-tight text-th-800 sm:text-base">Weekly Planner</h1>
+              <h1 className="truncate text-[15px] font-extrabold tracking-tight text-th-800 md:text-base">Tracker</h1>
               {syncStatus === "offline" && (
                 <p className="text-[10px] font-medium text-amber-600">Offline — saved locally</p>
               )}
               {syncStatus === "syncing" && (
-                <p className="text-[10px] font-medium text-th-500">Syncing…</p>
+                <p className="text-[10px] font-medium text-th-500">Saving…</p>
               )}
             </div>
           </div>
-          <ThemePicker
-            themeId={themeId}
-            customAccent={customAccent}
-            onSelectPreset={setThemeId}
-            onCustomAccent={(hex) => {
-              setCustomAccent(hex);
-              setThemeId("custom");
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <NotificationPanel settings={notifications} onChange={setNotifications} />
+            <ThemePicker
+              themeId={activeTheme.themeId}
+              customAccent={activeTheme.customAccent}
+              isDaily={activeTheme.isDaily}
+              onSelectPreset={(id) => {
+                setThemeId(id);
+                setThemeManualDate(getTodayStr());
+              }}
+              onCustomAccent={(hex) => {
+                setCustomAccent(hex);
+                setThemeId("custom");
+                setThemeManualDate(getTodayStr());
+              }}
+              onUseDailyTheme={() => setThemeManualDate(null)}
+            />
+          </div>
         </div>
-        <div className="flex w-full min-w-0 items-center gap-1.5 md:w-auto md:justify-end">
+        <div className="home-week-nav flex w-full min-w-0 items-center gap-1 md:w-auto md:justify-end">
           <button
             type="button"
             onClick={() => setWeekStart(shiftWeekStart(weekStart, -1))}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-th-200 bg-[var(--surface-color)] text-th-600 shadow-sm transition active:scale-95 md:h-9 md:w-9 md:hover:border-th-300 md:hover:bg-th-50"
+            className="home-week-btn flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-th-200 bg-[var(--surface-color)] text-th-600 shadow-sm transition active:scale-95 md:h-9 md:w-9 md:hover:border-th-300 md:hover:bg-th-50"
             aria-label="Previous week"
           >
-            <ChevronLeft size={20} strokeWidth={2.5} className="md:h-[18px] md:w-[18px]" />
+            <ChevronLeft size={18} strokeWidth={2.5} className="md:h-[18px] md:w-[18px]" />
           </button>
           <button
             type="button"
             onClick={() => {
               if (!isCurrentWeek) setWeekStart(getDefaultWeekStart());
             }}
-            className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-full border px-2.5 py-2.5 text-[11px] font-bold shadow-sm transition md:flex-none md:px-3 md:py-2 ${
+            className={`home-week-pill flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border px-3 py-2 text-xs font-bold shadow-sm transition md:flex-none md:px-3 md:py-2 ${
               isCurrentWeek
                 ? "cursor-default border-th-200 bg-[var(--surface-color)] text-th-700"
                 : "border-th-300 bg-th-50 text-th-700 active:scale-[0.98] md:hover:border-th-400 md:hover:bg-th-100"
@@ -2476,18 +3546,20 @@ export default function ProductivityDashboard() {
           <button
             type="button"
             onClick={() => setWeekStart(shiftWeekStart(weekStart, 1))}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-th-200 bg-[var(--surface-color)] text-th-600 shadow-sm transition active:scale-95 md:h-9 md:w-9 md:hover:border-th-300 md:hover:bg-th-50"
+            className="home-week-btn flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-th-200 bg-[var(--surface-color)] text-th-600 shadow-sm transition active:scale-95 md:h-9 md:w-9 md:hover:border-th-300 md:hover:bg-th-50"
             aria-label="Next week"
           >
-            <ChevronRight size={20} strokeWidth={2.5} className="md:h-[18px] md:w-[18px]" />
+            <ChevronRight size={18} strokeWidth={2.5} className="md:h-[18px] md:w-[18px]" />
           </button>
         </div>
       </header>
 
-      {/* Day columns — primary on mobile, snap scroll */}
+      <div className="home-mobile-main flex min-h-0 flex-1 flex-col md:contents">
+      {/* Day columns — hero carousel on mobile */}
+      <div className="home-day-stage order-1 flex min-h-0 flex-1 flex-col md:contents">
       <div
         ref={dayColumnsScrollRef}
-        className="day-columns-scroll scroll-thin snap-x-mandatory order-1 mb-2 flex shrink-0 gap-2 overflow-x-auto pb-1 animate-fade-up md:order-3 md:mb-0 md:snap-none md:gap-1 md:pb-0.5"
+        className="day-columns-scroll scroll-thin snap-x-mandatory flex min-h-0 flex-1 gap-2 overflow-x-auto overflow-y-hidden pb-0.5 animate-fade-up md:order-3 md:mb-0 md:flex-none md:snap-none md:gap-1 md:pb-0.5"
         style={{ animationDelay: "100ms" }}
       >
         {weekDays.map((day) => {
@@ -2506,9 +3578,9 @@ export default function ProductivityDashboard() {
             <div
               key={day.date}
               id={`day-col-${day.date}`}
-              className={`flex min-w-[var(--day-col-min-w)] flex-none flex-col gap-1 scroll-mx-2 snap-center rounded-xl transition-all duration-300 md:min-w-[132px] md:flex-1 ${
-                isFocused ? "scale-[1.01]" : isToday ? "scale-[1.02] md:scale-[1.01]" : ""
-              } ${perfect ? "perfect-day-col perfect-day-glow p-0.5" : ""}`}
+              className={`day-col home-day-col flex min-w-[var(--day-col-min-w)] flex-none flex-col gap-1.5 scroll-mx-3 snap-center rounded-2xl transition-all duration-300 md:min-w-[132px] md:flex-1 md:gap-1 md:rounded-xl ${
+                isToday ? "day-col--today" : "day-col--side"
+              } ${isFocused ? "day-col--focused" : ""} ${perfect ? "perfect-day-col perfect-day-glow p-0.5" : ""}`}
               style={
                 isToday && !perfect
                   ? ({ "--day-accent": dayPalette.accent } as React.CSSProperties)
@@ -2524,35 +3596,33 @@ export default function ProductivityDashboard() {
                 isPast={isPast}
                 isFuture={isFuture}
                 compact={isMobile}
+                studyHours={studyHours[day.date]}
+                studyHoursLocked={!isStudyHoursEditable(day.date)}
+                onStudyHoursSave={(hours) => updateStudyHours(day.date, hours)}
               />
 
               <div
-                className={`flex shrink-0 flex-col overflow-hidden rounded-lg border transition-all duration-300 ${
+                className={`home-day-body flex shrink-0 flex-col overflow-hidden rounded-2xl border transition-all duration-300 md:rounded-lg ${
                   perfect
                     ? "panel border-2 border-amber-400 bg-amber-50/30 shadow-lg shadow-amber-200/50"
                     : isToday
-                      ? "panel day-panel-accent border-2 shadow-lg ring-1 ring-[color-mix(in_srgb,var(--day-accent)_35%,transparent)]"
+                      ? "panel day-panel-accent home-day-body--today border-2 shadow-lg ring-1 ring-[color-mix(in_srgb,var(--day-accent)_35%,transparent)]"
                       : isFocused
                         ? "panel border-th-300 shadow-lg shadow-th-200-60"
-                        : "panel border-th-100-60 bg-white/80"
+                        : "panel glass-card border-th-100-60"
                 }`}
               >
-                <div className="habit-slots-stack flex flex-col gap-px p-1">
-                  {dayHabits.length === 0 ? (
-                    <p className="habit-slot-h flex items-center justify-center text-[11px] text-th-400">No habits</p>
+                <DayHabitSlots
+                  date={day.date}
+                  habits={habits}
+                  locked={locked}
+                  onToggle={(habitId) => toggleHabit(habitId, day.date)}
+                />
+                <div className="home-day-footer shrink-0 border-t border-th-100 bg-grad-th-footer px-2 py-2.5 md:px-1.5 md:py-1.5">
+                  {!isTrackingDate(day.date) ? (
+                    <p className="text-center text-xs font-bold text-th-400">—</p>
                   ) : (
-                    dayHabits.map((habit) => (
-                      <TaskCheck
-                        key={habit.id}
-                        checked={isHabitDone(habit, day.date)}
-                        locked={locked}
-                        onToggle={() => toggleHabit(habit.id, day.date)}
-                        label={habit.name}
-                      />
-                    ))
-                  )}
-                </div>
-                <div className="shrink-0 border-t border-th-100 bg-grad-th-footer px-1.5 py-2 md:py-1.5">
+                    <>
                   <div className="day-progress-bar mb-1.5 overflow-hidden rounded-full bg-th-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
@@ -2589,36 +3659,33 @@ export default function ProductivityDashboard() {
                       )}
                     </span>
                   </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
       </div>
-
-      {/* Mobile insights — tabbed to reduce scroll */}
-      <div className="order-2 mb-2 shrink-0 md:hidden">
-        <MobileInsightsTabs active={mobileInsightsTab} onChange={setMobileInsightsTab} />
-        <div
-          className={`panel mobile-insights-panel flex flex-col overflow-hidden rounded-xl border border-th-100-80 ${
-            mobileInsightsTab === "progress"
-              ? "h-auto max-h-none"
-              : "h-[min(48vh,320px)] max-h-[min(48vh,320px)]"
-          }`}
-        >
-          <div
-            className={`flex flex-col overflow-hidden ${
-              mobileInsightsTab === "progress" ? "h-auto" : "min-h-0 flex-1"
-            }`}
-          >
-            {mobileInsightsTab === "score" && scorePanel}
-            {mobileInsightsTab === "progress" && (
-              <div className="overflow-y-auto p-3">{progressPanel}</div>
-            )}
-            {mobileInsightsTab === "manage" && managePanel}
-          </div>
-        </div>
       </div>
+
+      {/* Mobile bottom tab bar — opens popup sheet */}
+      <div className="home-bottom-dock order-2 shrink-0 md:hidden">
+        <MobileInsightsTabs
+          active={mobileInsightsSheet}
+          onChange={(tab) => setMobileInsightsSheet((prev) => (prev === tab ? null : tab))}
+        />
+      </div>
+
+      </div>
+
+      {mobileInsightsSheet && (
+        <MobileInsightsSheet tab={mobileInsightsSheet} onClose={() => setMobileInsightsSheet(null)}>
+          {mobileInsightsSheet === "score" && scoreSheetPanel}
+          {mobileInsightsSheet === "progress" && progressSheetPanel}
+          {mobileInsightsSheet === "manage" && manageSheetPanel}
+        </MobileInsightsSheet>
+      )}
 
       {/* Stats panels — 3 columns on desktop */}
       <div className="order-3 mb-1 hidden min-h-0 flex-1 grid-cols-12 gap-1.5 animate-fade-up md:order-2 md:grid" style={{ animationDelay: "50ms" }}>

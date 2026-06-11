@@ -24,3 +24,12 @@ export async function saveDashboardStateRemote(state: DashboardState): Promise<v
   });
   if (!res.ok) throw new Error(`Failed to save dashboard (${res.status})`);
 }
+
+export function saveDashboardStateKeepalive(state: DashboardState): void {
+  fetch(API_URL, {
+    method: "PUT",
+    headers: getHeaders(),
+    body: JSON.stringify(state),
+    keepalive: true,
+  }).catch(() => {});
+}

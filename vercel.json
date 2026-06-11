@@ -1,5 +1,15 @@
 {
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/|manifest\\.webmanifest|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|favicon\\.png|logo\\.png).*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/reminders",
+      "schedule": "30 2 * * *"
+    },
+    {
+      "path": "/api/cron/reminders",
+      "schedule": "30 14 * * *"
+    }
   ]
 }
