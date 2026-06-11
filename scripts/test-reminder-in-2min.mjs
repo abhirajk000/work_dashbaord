@@ -7,7 +7,7 @@
  * 4. Reports whether a notification was sent
  *
  * Usage: node scripts/test-reminder-in-2min.mjs
- * Requires .env.local with DASHBOARD_API_KEY and CRON_SECRET
+ * Requires .env.local with DASHBOARD_API_KEY (or VITE_DASHBOARD_API_KEY)
  */
 
 import { readFileSync } from "node:fs";
@@ -17,19 +17,21 @@ const APP_URL = process.env.APP_URL ?? "https://work-raaz-0.vercel.app";
 const TIMEZONE = "Asia/Kolkata";
 
 function loadEnvLocal() {
-  try {
-    const raw = readFileSync(resolve(process.cwd(), ".env.local"), "utf8");
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq === -1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
-      if (!process.env[key]) process.env[key] = value;
+  for (const file of [".env.local", ".env.vercel.test", ".env.vercel.prod"]) {
+    try {
+      const raw = readFileSync(resolve(process.cwd(), file), "utf8");
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+        process.env[key] = value;
+      }
+    } catch {
+      // optional
     }
-  } catch {
-    // optional
   }
 }
 
@@ -73,14 +75,9 @@ async function main() {
   loadEnvLocal();
 
   const apiKey = process.env.DASHBOARD_API_KEY ?? process.env.VITE_DASHBOARD_API_KEY;
-  const cronSecret = process.env.CRON_SECRET;
 
   if (!apiKey) {
     console.error("Missing DASHBOARD_API_KEY in .env.local");
-    process.exit(1);
-  }
-  if (!cronSecret) {
-    console.error("Missing CRON_SECRET in .env.local");
     process.exit(1);
   }
 
@@ -150,7 +147,7 @@ async function main() {
 
   console.log("Invoking cron reminders...");
   const cronRes = await fetch(`${APP_URL}/api/cron/reminders`, {
-    headers: { Authorization: `Bearer ${cronSecret}` },
+    headers: { Authorization: `Bearer ${apiKey}` },
   });
   const cronBody = await cronRes.json().catch(() => ({}));
 
