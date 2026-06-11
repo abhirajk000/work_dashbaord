@@ -11,8 +11,7 @@ import { formatTimeDisplay, normalizeReminderTimes, normalizeTimeValue, sortRemi
 import {
   getDeviceTimezone,
   NTFY_SUBSCRIBE_URL,
-  sendHabitReminderTest,
-  sendScheduledTestNtfyNotification,
+  sendHabitReminderPreview,
   sendTestNtfyNotification,
 } from "./src/lib/ntfy-notifications";
 import {
@@ -2255,10 +2254,10 @@ function HabitMasterEditor({
     setTestingKey(key);
     setTestStatus(null);
     try {
-      await sendHabitReminderTest({ habitName, time, variant: "primary" });
-      setTestStatus(`Test sent for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)} — check ntfy.`);
+      await sendHabitReminderPreview({ habitName, time, variant: "primary" });
+      setTestStatus(`Preview sent for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)} — check ntfy.`);
     } catch (err) {
-      setTestStatus(err instanceof Error ? err.message : "Reminder test failed.");
+      setTestStatus(err instanceof Error ? err.message : "Reminder preview failed.");
     } finally {
       setTestingKey(null);
     }
@@ -2359,8 +2358,8 @@ function HabitMasterEditor({
                           onClick={() => void handleTestReminder(h.name, time, `${h.id}-${ti}`)}
                           disabled={testingKey === `${h.id}-${ti}`}
                           className="flex h-5 w-5 items-center justify-center rounded-full text-th-500 transition hover:bg-th-100 hover:text-th-700 disabled:opacity-50"
-                          aria-label={`Test reminder for ${h.name} at ${formatTimeDisplay(time)}`}
-                          title="Send test reminder"
+                          aria-label={`Preview reminder for ${h.name} at ${formatTimeDisplay(time)}`}
+                          title="Preview reminder"
                         >
                           <BellRing size={10} className={testingKey === `${h.id}-${ti}` ? "animate-pulse" : ""} />
                         </button>
@@ -2718,22 +2717,9 @@ function NotificationPanel({
     setBusy(true);
     try {
       await sendTestNtfyNotification();
-      setStatus("Test sent to ntfy.sh/Tracker — check the ntfy app.");
+      setStatus("Notification sent to ntfy.sh/Tracker — check the ntfy app.");
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Test failed.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleScheduledTest = async () => {
-    setStatus(null);
-    setBusy(true);
-    try {
-      await sendScheduledTestNtfyNotification(2);
-      setStatus("Test scheduled for 2 minutes from now — keep ntfy subscribed to Tracker.");
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Scheduled test failed.");
+      setStatus(err instanceof Error ? err.message : "Notification failed.");
     } finally {
       setBusy(false);
     }
@@ -2843,24 +2829,14 @@ function NotificationPanel({
 
             
 
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void handleTest()}
-                    className="flex-1 rounded-xl border border-th-200 bg-white px-3 py-2 text-xs font-semibold text-th-700 transition hover:bg-th-50 disabled:opacity-50"
-                  >
-                    Send now
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void handleScheduledTest()}
-                    className="flex-1 rounded-xl bg-grad-th-btn px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
-                  >
-                    Test in 2 min
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleTest()}
+                  className="w-full rounded-xl border border-th-200 bg-white px-3 py-2 text-xs font-semibold text-th-700 transition hover:bg-th-50 disabled:opacity-50"
+                >
+                  Send test notification
+                </button>
                 <p className="text-[10px] leading-snug text-th-500">
                   Tap a time to change it, then Save. Subscribe to <strong>Tracker</strong> in the{" "}
                   <a href={NTFY_SUBSCRIBE_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-th-700 underline">

@@ -45,7 +45,7 @@ export function buildHabitPrimaryReminder(habitName: string): Pick<HabitReminder
   const habit = displayHabitName(habitName);
   return {
     title: `⏰ ${habit}`,
-    body: `It's time for "${habit}" — open Tracker and check it off when you're done! 💪`,
+    body: `It's time for "${habit}" 💪`,
     tags: "alarm_clock",
   };
 }

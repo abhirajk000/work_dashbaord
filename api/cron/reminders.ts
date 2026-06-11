@@ -27,19 +27,10 @@ function getSql() {
 }
 
 function isCronAuthorized(req: VercelRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return process.env.NODE_ENV !== "production";
   const auth = req.headers.authorization;
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && (auth === `Bearer ${cronSecret}` || auth === cronSecret)) {
-    return true;
-  }
-
-  const apiKey = process.env.DASHBOARD_API_KEY;
-  if (apiKey && auth === `Bearer ${apiKey}`) {
-    return true;
-  }
-
-  if (!cronSecret) return process.env.NODE_ENV !== "production";
-  return false;
+  return auth === `Bearer ${secret}` || auth === secret;
 }
 
 async function sendNtfy(title: string, body: string, tags = "bell"): Promise<void> {
