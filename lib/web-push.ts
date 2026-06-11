@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { neon } from "@neondatabase/serverless";
+import { getSql } from "./sql.js";
 
 type PushSubscriptionRow = {
   id: number;
@@ -14,12 +14,6 @@ export type WebPushPayload = {
   url?: string;
   tag?: string;
 };
-
-function getSql() {
-  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) throw new Error("DATABASE_URL or POSTGRES_URL is not set");
-  return neon(url);
-}
 
 function getVapidConfig(): { publicKey: string; privateKey: string; subject: string } | null {
   const publicKey = process.env.VAPID_PUBLIC_KEY;
@@ -54,7 +48,7 @@ export async function listPushSubscriptions(): Promise<PushSubscriptionRow[]> {
     FROM push_subscriptions
     ORDER BY updated_at DESC
   `;
-  return rows as PushSubscriptionRow[];
+  return rows as unknown as PushSubscriptionRow[];
 }
 
 export async function upsertPushSubscription(
@@ -91,7 +85,7 @@ export async function sendWebPushToAll(payload: WebPushPayload): Promise<number>
     process.env.APP_URL ??
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : "https://track-raaz-0.vercel.app");
+      : "https://trackk.k12hunar.com");
 
   const body = JSON.stringify({
     title: payload.title,

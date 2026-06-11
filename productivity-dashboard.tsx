@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { createPortal } from "react-dom";
 import localforage from "localforage";
 import { fetchDashboardState, saveDashboardStateKeepalive, saveDashboardStateRemote } from "./src/lib/dashboard-api";
+import { fetchPinSession, verifyPinRemote } from "./src/lib/pin-api";
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   normalizeNotificationSettings,
@@ -161,6 +162,8 @@ const LEGACY_DUMMY_HABIT_NAMES = new Set([
 
 const STORAGE_KEY = "productivity-dashboard-v2";
 const LEGACY_STORAGE_KEY = "productivity-dashboard-v1";
+const PIN_MIN_LEN = 4;
+const PIN_MAX_LEN = 6;
 
 const WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WEEKDAY_SHORTS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -3171,6 +3174,99 @@ function ThemePicker({
   );
 }
 
+// ─── PIN gate ────────────────────────────────────────────────────────────────
+
+function normalizePinInput(value: string): string {
+  return value.replace(/\D/g, "").slice(0, PIN_MAX_LEN);
+}
+
+function isCompletePin(pin: string): boolean {
+  return pin.length >= PIN_MIN_LEN && pin.length <= PIN_MAX_LEN;
+}
+
+function PinGate({ onSuccess }: { onSuccess: () => void }) {
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+
+    if (!isCompletePin(pin)) {
+      setError(`Enter a ${PIN_MIN_LEN}–${PIN_MAX_LEN} digit PIN.`);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const ok = await verifyPinRemote(pin);
+      setPin("");
+      if (!ok) {
+        setError("Incorrect code. Try again.");
+        return;
+      }
+      onSuccess();
+    } catch {
+      setPin("");
+      setError("Could not verify. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-dashboard safe-pt safe-px safe-pb flex min-h-dvh flex-col items-center justify-center font-sans text-th-900">
+      <div className="panel w-full max-w-sm rounded-2xl border border-th-100-80 p-5 shadow-lg">
+        <div className="mb-4 flex flex-col items-center gap-2 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-th-50 text-th-700">
+            <Lock size={22} strokeWidth={2.25} aria-hidden />
+          </div>
+          <h1 className="text-lg font-extrabold tracking-tight text-th-800">Unlock Tracker</h1>
+          <p className="text-xs font-medium text-th-500">Enter your access code to continue.</p>
+        </div>
+
+        <form className="space-y-3" onSubmit={(e) => void handleSubmit(e)}>
+          <label className="block">
+            <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-th-500">Code</span>
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              name="tracker-access-code"
+              pattern="[0-9]*"
+              value={pin}
+              onChange={(e) => setPin(normalizePinInput(e.target.value))}
+              className="w-full rounded-xl border border-th-200 bg-white px-3 py-2.5 text-center text-lg font-bold tracking-[0.35em] text-th-800 outline-none transition focus:border-th-400 focus:ring-2 focus:ring-th-200"
+              placeholder={"•".repeat(PIN_MIN_LEN)}
+              autoFocus
+              disabled={busy}
+              aria-label="Access code"
+            />
+          </label>
+
+          {error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs font-semibold text-rose-700">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full rounded-xl bg-grad-th-btn px-4 py-2.5 text-sm font-bold text-white shadow-sm transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy ? "Please wait…" : "Unlock"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Loading ─────────────────────────────────────────────────────────────────
 
 function LoadingScreen() {
@@ -3193,6 +3289,7 @@ export default function ProductivityDashboard() {
   const [reward, setReward] = useState(DEFAULT_STATE.reward);
   const [affirmation, setAffirmation] = useState(DEFAULT_STATE.affirmation);
   const [weekStart, setWeekStart] = useState(DEFAULT_STATE.weekStart);
+  const [pinPhase, setPinPhase] = useState<"checking" | "unlock" | "ready">("checking");
   const [isLoading, setIsLoading] = useState(true);
   const [progressView, setProgressView] = useState<ProgressView>("week");
   const [progressMonth, setProgressMonth] = useState(getCurrentMonthYear);
@@ -3326,6 +3423,26 @@ export default function ProductivityDashboard() {
   useEffect(() => {
     let cancelled = false;
 
+    async function initPinGate() {
+      try {
+        const unlocked = await fetchPinSession();
+        if (!cancelled) setPinPhase(unlocked ? "ready" : "unlock");
+      } catch {
+        if (!cancelled) setPinPhase("unlock");
+      }
+    }
+
+    void initPinGate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (pinPhase !== "ready") return;
+
+    let cancelled = false;
+
     async function loadLocalState(): Promise<DashboardState | null> {
       let saved = await localforage.getItem<DashboardState>(STORAGE_KEY);
       if (!saved) {
@@ -3365,6 +3482,14 @@ export default function ProductivityDashboard() {
             }
           }
         } catch (err) {
+          if (err instanceof Error && err.message === "Unauthorized") {
+            if (!cancelled) {
+              isHydrated.current = false;
+              setIsLoading(true);
+              setPinPhase("unlock");
+            }
+            return;
+          }
           console.warn("Remote load failed, using local cache:", err);
           saved = await loadLocalState();
           setSyncStatus("offline");
@@ -3384,7 +3509,7 @@ export default function ProductivityDashboard() {
 
     loadState();
     return () => { cancelled = true; };
-  }, [applyLoadedState]);
+  }, [applyLoadedState, pinPhase]);
 
   useEffect(() => {
     if (!isHydrated.current) return;
@@ -3507,6 +3632,10 @@ export default function ProductivityDashboard() {
     );
   }, []);
 
+  if (pinPhase === "checking") return <LoadingScreen />;
+  if (pinPhase === "unlock") {
+    return <PinGate onSuccess={() => setPinPhase("ready")} />;
+  }
   if (isLoading) return <LoadingScreen />;
 
   const progressPanel = (

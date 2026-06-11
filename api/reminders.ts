@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { neon } from "@neondatabase/serverless";
+import { isBrowserOrServerAuthorized } from "../lib/browser-auth.js";
+import { getSql } from "../lib/sql.js";
 import {
   buildHabitFollowupReminder,
   buildHabitPrimaryReminder,
@@ -15,18 +16,6 @@ import {
 } from "../lib/web-push.js";
 
 const ROW_ID = "default";
-
-function getSql() {
-  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) throw new Error("DATABASE_URL or POSTGRES_URL is not set");
-  return neon(url);
-}
-
-function isAuthorized(req: VercelRequest): boolean {
-  const key = process.env.DASHBOARD_API_KEY;
-  if (!key) return true;
-  return req.headers.authorization === `Bearer ${key}`;
-}
 
 function parseBody<T>(req: VercelRequest): T {
   if (!req.body) return {} as T;
@@ -160,7 +149,7 @@ async function handleSubscribe(req: VercelRequest, res: VercelResponse) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (!isAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  if (!isBrowserOrServerAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     const op = getOp(req);

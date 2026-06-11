@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { neon } from "@neondatabase/serverless";
+import { getSql } from "../../lib/sql.js";
 import { buildHabitReminderSchedule } from "../../lib/habit-reminders.js";
 import { deliverReminder } from "../../lib/deliver-notification.js";
 import { NTFY_TOPIC, GREEN_PERCENT, normalizeNotificationSettings } from "../../lib/notification-types.js";
@@ -20,12 +20,6 @@ type Habit = {
   deletedAt?: string;
   reminderTimes?: string[];
 };
-
-function getSql() {
-  const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
-  if (!url) throw new Error("DATABASE_URL or POSTGRES_URL is not set");
-  return neon(url);
-}
 
 function isCronAuthorized(req: VercelRequest): boolean {
   const auth = req.headers.authorization;
@@ -96,7 +90,7 @@ async function setLastCronRun(now: Date): Promise<void> {
   const sql = getSql();
   await sql`
     INSERT INTO dashboard_state (id, data, updated_at)
-    VALUES (${CRON_ROW_ID}, ${{ lastRunAt: now.toISOString() }}, NOW())
+    VALUES (${CRON_ROW_ID}, ${sql.json({ lastRunAt: now.toISOString() })}, NOW())
     ON CONFLICT (id) DO UPDATE SET
       data = EXCLUDED.data,
       updated_at = NOW()

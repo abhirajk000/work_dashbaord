@@ -19,7 +19,7 @@ export async function sendNtfyNotification(
     process.env.APP_URL ??
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : "https://track-raaz-0.vercel.app");
+      : "https://trackk.k12hunar.com");
 
   const tags = (options?.tags ?? "bell")
     .split(",")

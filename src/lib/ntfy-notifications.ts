@@ -3,10 +3,7 @@ import { NTFY_TOPIC, type NotificationSettings } from "../../lib/notification-ty
 export const NTFY_SUBSCRIBE_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 function getHeaders(): HeadersInit {
-  const headers: HeadersInit = { "Content-Type": "application/json" };
-  const key = import.meta.env.VITE_DASHBOARD_API_KEY;
-  if (key) headers.Authorization = `Bearer ${key}`;
-  return headers;
+  return { "Content-Type": "application/json" };
 }
 
 export function getDeviceTimezone(): string {
@@ -31,6 +28,7 @@ export async function scheduleHabitReminders(options?: {
   const res = await fetch("/api/reminders?op=schedule", {
     method: "POST",
     headers: getHeaders(),
+    credentials: "include",
     body: JSON.stringify(options ?? {}),
   });
   if (!res.ok) {
@@ -43,6 +41,7 @@ export async function sendTestNtfyNotification(): Promise<void> {
   const res = await fetch("/api/reminders?op=test", {
     method: "POST",
     headers: getHeaders(),
+    credentials: "include",
     body: "{}",
   });
   if (!res.ok) {
@@ -59,6 +58,7 @@ export async function sendHabitReminderPreview(options: {
   const res = await fetch("/api/reminders?op=test", {
     method: "POST",
     headers: getHeaders(),
+    credentials: "include",
     body: JSON.stringify({
       habitName: options.habitName,
       time: options.time,

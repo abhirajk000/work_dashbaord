@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS app_pin (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  pin_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

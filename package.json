@@ -14,9 +14,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
     "localforage": "^1.10.0",
     "lucide-react": "^1.17.0",
+    "postgres": "^3.4.9",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "web-push": "^3.6.7"

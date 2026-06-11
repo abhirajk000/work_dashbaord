@@ -1,8 +1,5 @@
 function getHeaders(): HeadersInit {
-  const headers: HeadersInit = { "Content-Type": "application/json" };
-  const key = import.meta.env.VITE_DASHBOARD_API_KEY;
-  if (key) headers.Authorization = `Bearer ${key}`;
-  return headers;
+  return { "Content-Type": "application/json" };
 }
 
 function getVapidPublicKey(): string | null {
@@ -70,6 +67,7 @@ export async function subscribeWebPush(): Promise<"subscribed" | "denied" | "uns
   const res = await fetch("/api/reminders?op=subscribe", {
     method: "POST",
     headers: getHeaders(),
+    credentials: "include",
     body: JSON.stringify({
       endpoint: json.endpoint,
       keys: json.keys,
@@ -94,6 +92,7 @@ export async function unsubscribeWebPush(): Promise<void> {
   await fetch("/api/push/subscribe", {
     method: "DELETE",
     headers: getHeaders(),
+    credentials: "include",
     body: JSON.stringify({ endpoint }),
   });
 }
@@ -110,6 +109,7 @@ export async function syncWebPushSubscription(): Promise<"subscribed" | "not-sub
   const res = await fetch("/api/reminders?op=subscribe", {
     method: "POST",
     headers: getHeaders(),
+    credentials: "include",
     body: JSON.stringify({
       endpoint: json.endpoint,
       keys: json.keys,

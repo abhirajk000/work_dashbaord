@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import postgres from "postgres";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -11,7 +11,7 @@ if (!url) {
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const schema = readFileSync(join(root, "sql", "migrate-ntfy.sql"), "utf8");
-const sql = neon(url);
+const sql = postgres(url, { max: 1, prepare: false });
 
 const statements = schema
   .trim()
@@ -20,7 +20,8 @@ const statements = schema
   .filter((s) => s.length > 0 && !s.startsWith("--"));
 
 for (const statement of statements) {
-  await sql.query(statement);
+  await sql.unsafe(statement);
 }
 
+await sql.end();
 console.log(`ntfy migration applied (${statements.length} statements).`);
