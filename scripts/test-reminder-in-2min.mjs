@@ -17,7 +17,7 @@ const APP_URL = process.env.APP_URL ?? "https://work-raaz-0.vercel.app";
 const TIMEZONE = "Asia/Kolkata";
 
 function loadEnvLocal() {
-  for (const file of [".env.local", ".env.vercel.test", ".env.vercel.prod"]) {
+  for (const file of [".env.vercel.test", ".env.vercel.prod", ".env.local"]) {
     try {
       const raw = readFileSync(resolve(process.cwd(), file), "utf8");
       for (const line of raw.split("\n")) {
