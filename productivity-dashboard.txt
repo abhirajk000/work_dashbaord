@@ -1,0 +1,406 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import localforage from "localforage";
+import { Check } from "lucide-react";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+type Habit = {
+  id: string;
+  name: string;
+  completions: Record<DayKey, boolean>;
+};
+
+type DashboardState = {
+  habits: Habit[];
+  weeklyFocus: string;
+  reward: string;
+  affirmation: string;
+};
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "productivity-dashboard-v1";
+
+const DAYS: { key: DayKey; label: string; short: string }[] = [
+  { key: "mon", label: "Monday", short: "Mon" },
+  { key: "tue", label: "Tuesday", short: "Tue" },
+  { key: "wed", label: "Wednesday", short: "Wed" },
+  { key: "thu", label: "Thursday", short: "Thu" },
+  { key: "fri", label: "Friday", short: "Fri" },
+  { key: "sat", label: "Saturday", short: "Sat" },
+  { key: "sun", label: "Sunday", short: "Sun" },
+];
+
+const DEFAULT_HABITS: Habit[] = [
+  "Wake up at 6:30",
+  "Gym / Weight Training",
+  "Grammar & English Drill",
+  "Deep Work",
+  "Check SIPs & Budget",
+  "No sugar",
+].map((name, i) => ({
+  id: `habit-${i}`,
+  name,
+  completions: {
+    mon: false,
+    tue: false,
+    wed: false,
+    thu: false,
+    fri: false,
+    sat: false,
+    sun: false,
+  },
+}));
+
+const DEFAULT_STATE: DashboardState = {
+  habits: DEFAULT_HABITS,
+  weeklyFocus: "Finish frontend UI and review components.",
+  reward: "Movie night, no guilt.",
+  affirmation: "Progress over perfection.",
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function createEmptyCompletions(): Record<DayKey, boolean> {
+  return { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false };
+}
+
+function getDayCompletionPercent(habits: Habit[], day: DayKey): number {
+  if (habits.length === 0) return 0;
+  const completed = habits.filter((h) => h.completions[day]).length;
+  return Math.round((completed / habits.length) * 100);
+}
+
+// ─── Progress Ring ───────────────────────────────────────────────────────────
+
+type ProgressRingProps = {
+  percent: number;
+  label: string;
+  size?: number;
+};
+
+function ProgressRing({ percent, label, size = 72 }: ProgressRingProps) {
+  const stroke = 5;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (percent / 100) * circumference;
+
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="#d1fae5"
+            strokeWidth={stroke}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="#22c55e"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            className="transition-all duration-500 ease-out"
+          />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-green-600">
+          {percent}%
+        </span>
+      </div>
+      <span className="text-xs font-semibold text-green-700">{label}</span>
+    </div>
+  );
+}
+
+// ─── Habit Toggle ────────────────────────────────────────────────────────────
+
+type HabitToggleProps = {
+  checked: boolean;
+  onToggle: () => void;
+  ariaLabel: string;
+};
+
+function HabitToggle({ checked, onToggle, ariaLabel }: HabitToggleProps) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={ariaLabel}
+      aria-pressed={checked}
+      className={`mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-1 ${
+        checked
+          ? "bg-green-500 shadow-sm shadow-green-200"
+          : "bg-green-50 hover:bg-green-100"
+      }`}
+    >
+      <Check
+        size={18}
+        strokeWidth={2.5}
+        className={checked ? "text-white" : "text-transparent"}
+      />
+    </button>
+  );
+}
+
+// ─── Loading State ───────────────────────────────────────────────────────────
+
+function LoadingScreen() {
+  return (
+    <div
+      className="flex min-h-screen items-center justify-center"
+      style={{ backgroundColor: "#f4fcf6" }}
+    >
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-green-200 border-t-green-500" />
+        <p className="text-sm font-medium text-green-600">Loading your dashboard…</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Dashboard ──────────────────────────────────────────────────────────
+
+export default function ProductivityDashboard() {
+  const [habits, setHabits] = useState<Habit[]>(DEFAULT_HABITS);
+  const [weeklyFocus, setWeeklyFocus] = useState(DEFAULT_STATE.weeklyFocus);
+  const [reward, setReward] = useState(DEFAULT_STATE.reward);
+  const [affirmation, setAffirmation] = useState(DEFAULT_STATE.affirmation);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const isHydrated = useRef(false);
+
+  // Load persisted state on mount
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadState() {
+      try {
+        const saved = await localforage.getItem<DashboardState>(STORAGE_KEY);
+        if (cancelled) return;
+
+        if (saved) {
+          setHabits(saved.habits ?? DEFAULT_HABITS);
+          setWeeklyFocus(saved.weeklyFocus ?? DEFAULT_STATE.weeklyFocus);
+          setReward(saved.reward ?? DEFAULT_STATE.reward);
+          setAffirmation(saved.affirmation ?? DEFAULT_STATE.affirmation);
+        }
+      } catch (err) {
+        console.error("Failed to load dashboard state:", err);
+      } finally {
+        if (!cancelled) {
+          isHydrated.current = true;
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadState();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Auto-save whenever state changes (after hydration)
+  useEffect(() => {
+    if (!isHydrated.current) return;
+
+    const state: DashboardState = { habits, weeklyFocus, reward, affirmation };
+    localforage.setItem(STORAGE_KEY, state).catch((err) => {
+      console.error("Failed to save dashboard state:", err);
+    });
+  }, [habits, weeklyFocus, reward, affirmation]);
+
+  const toggleHabit = useCallback((habitId: string, day: DayKey) => {
+    setHabits((prev) =>
+      prev.map((h) =>
+        h.id === habitId
+          ? { ...h, completions: { ...h.completions, [day]: !h.completions[day] } }
+          : h
+      )
+    );
+  }, []);
+
+  const updateHabitName = useCallback((habitId: string, name: string) => {
+    setHabits((prev) => prev.map((h) => (h.id === habitId ? { ...h, name } : h)));
+  }, []);
+
+  const addHabit = useCallback(() => {
+    setHabits((prev) => [
+      ...prev,
+      { id: `habit-${Date.now()}`, name: "New habit", completions: createEmptyCompletions() },
+    ]);
+  }, []);
+
+  const removeHabit = useCallback((habitId: string) => {
+    setHabits((prev) => prev.filter((h) => h.id !== habitId));
+  }, []);
+
+  if (isLoading) return <LoadingScreen />;
+
+  return (
+    <div className="min-h-screen font-sans" style={{ backgroundColor: "#f4fcf6" }}>
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Page Header */}
+        <header className="mb-8">
+          <h1 className="text-2xl font-bold tracking-tight text-green-700 sm:text-3xl">
+            Productivity &amp; Life Tracker
+          </h1>
+          <p className="mt-1 text-sm text-green-600/70">
+            Track habits, plan your week, stay accountable.
+          </p>
+        </header>
+
+        {/* Weekly Planner — 3-column grid */}
+        <section className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Left 2 cols: Weekly Overview rings */}
+          <div className="rounded-2xl bg-white p-6 shadow-sm shadow-green-100/80 lg:col-span-2">
+            <h2 className="mb-5 text-lg font-bold text-green-700">Weekly Overview</h2>
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
+              {DAYS.map(({ key, short }) => (
+                <ProgressRing
+                  key={key}
+                  percent={getDayCompletionPercent(habits, key)}
+                  label={short}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Right col: Editable goals */}
+          <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm shadow-green-100/80">
+            <h2 className="text-lg font-bold text-green-700">Weekly Goals</h2>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wide text-green-600">
+                Weekly Focus
+              </span>
+              <input
+                type="text"
+                value={weeklyFocus}
+                onChange={(e) => setWeeklyFocus(e.target.value)}
+                className="rounded-xl border border-green-100 bg-green-50/50 px-3 py-2 text-sm text-green-800 outline-none transition focus:border-green-400 focus:ring-2 focus:ring-green-200"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wide text-green-600">
+                Reward
+              </span>
+              <input
+                type="text"
+                value={reward}
+                onChange={(e) => setReward(e.target.value)}
+                className="rounded-xl border border-green-100 bg-green-50/50 px-3 py-2 text-sm text-green-800 outline-none transition focus:border-green-400 focus:ring-2 focus:ring-green-200"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wide text-green-600">
+                Affirmation
+              </span>
+              <input
+                type="text"
+                value={affirmation}
+                onChange={(e) => setAffirmation(e.target.value)}
+                className="rounded-xl border border-green-100 bg-green-50/50 px-3 py-2 text-sm text-green-800 outline-none transition focus:border-green-400 focus:ring-2 focus:ring-green-200"
+              />
+            </label>
+          </div>
+        </section>
+
+        {/* Habit Tracker Table */}
+        <section className="rounded-2xl bg-white p-4 shadow-sm shadow-green-100/80 sm:p-6">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-bold text-green-700">Habit Tracker</h2>
+            <button
+              type="button"
+              onClick={addHabit}
+              className="rounded-xl bg-green-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-1"
+            >
+              + Add Habit
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] border-collapse">
+              <thead>
+                <tr className="border-b border-green-100">
+                  <th className="pb-3 pr-4 text-left text-xs font-bold uppercase tracking-wide text-green-600">
+                    Habit Name
+                  </th>
+                  {DAYS.map(({ key, short }) => (
+                    <th
+                      key={key}
+                      className="pb-3 text-center text-xs font-bold uppercase tracking-wide text-green-600"
+                    >
+                      {short}
+                    </th>
+                  ))}
+                  <th className="pb-3 pl-2 text-center text-xs font-bold uppercase tracking-wide text-green-600">
+                    &nbsp;
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {habits.map((habit) => (
+                  <tr
+                    key={habit.id}
+                    className="border-b border-green-50 transition hover:bg-green-50/40"
+                  >
+                    <td className="py-3 pr-4">
+                      <input
+                        type="text"
+                        value={habit.name}
+                        onChange={(e) => updateHabitName(habit.id, e.target.value)}
+                        className="w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium text-green-800 outline-none transition hover:border-green-100 focus:border-green-300 focus:bg-green-50/50"
+                      />
+                    </td>
+                    {DAYS.map(({ key, short }) => (
+                      <td key={key} className="py-3 text-center">
+                        <HabitToggle
+                          checked={habit.completions[key]}
+                          onToggle={() => toggleHabit(habit.id, key)}
+                          ariaLabel={`${habit.name} — ${short}`}
+                        />
+                      </td>
+                    ))}
+                    <td className="py-3 pl-2 text-center">
+                      <button
+                        type="button"
+                        onClick={() => removeHabit(habit.id)}
+                        className="rounded-lg px-2 py-1 text-xs text-green-400 transition hover:bg-red-50 hover:text-red-400"
+                        aria-label={`Remove ${habit.name}`}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {habits.length === 0 && (
+            <p className="py-8 text-center text-sm text-green-500">
+              No habits yet. Click &ldquo;Add Habit&rdquo; to get started.
+            </p>
+          )}
+        </section>
+
+        {/* Footer summary */}
+        <footer className="mt-6 text-center text-xs text-green-500/60">
+          Data saved locally in your browser · No account required
+        </footer>
+      </div>
+    </div>
+  );
+}
