@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { neon } from "@neondatabase/serverless";
-import type { DashboardState } from "../lib/dashboard-types";
+import type { DashboardState } from "../lib/dashboard-types.js";
 
 const ROW_ID = "default";
 

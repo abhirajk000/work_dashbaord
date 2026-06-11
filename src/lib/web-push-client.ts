@@ -67,7 +67,7 @@ export async function subscribeWebPush(): Promise<"subscribed" | "denied" | "uns
   }
 
   const json = subscription.toJSON();
-  const res = await fetch("/api/push/subscribe", {
+  const res = await fetch("/api/reminders?op=subscribe", {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({
@@ -107,7 +107,7 @@ export async function syncWebPushSubscription(): Promise<"subscribed" | "not-sub
   if (!subscription) return "not-subscribed";
 
   const json = subscription.toJSON();
-  const res = await fetch("/api/push/subscribe", {
+  const res = await fetch("/api/reminders?op=subscribe", {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({

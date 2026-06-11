@@ -12,7 +12,6 @@ export type DeliverOptions = {
   delay?: string;
   sequenceId?: string;
   tag?: string;
-  /** Skip notification_log writes (test/preview pings). */
   skipLog?: boolean;
   logDate?: string;
   kind?: string;

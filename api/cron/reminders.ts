@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { neon } from "@neondatabase/serverless";
-import { buildHabitReminderSchedule } from "../lib/habit-reminders.js";
-import { deliverReminder } from "../lib/deliver-notification.js";
-import { NTFY_TOPIC, GREEN_PERCENT, normalizeNotificationSettings } from "../lib/notification-types.js";
-import { getDateInTimezone, shouldFireReminderInWindow } from "../lib/reminder-window.js";
+import { buildHabitReminderSchedule } from "../../lib/habit-reminders.js";
+import { deliverReminder } from "../../lib/deliver-notification.js";
+import { NTFY_TOPIC, GREEN_PERCENT, normalizeNotificationSettings } from "../../lib/notification-types.js";
+import { getDateInTimezone, shouldFireReminderInWindow } from "../../lib/reminder-window.js";
 
 const ROW_ID = "default";
 const CRON_ROW_ID = "__cron__";

@@ -28,7 +28,7 @@ export async function scheduleHabitReminders(options?: {
   }>;
   notifications?: NotificationSettings;
 }): Promise<void> {
-  const res = await fetch("/api/reminders/schedule", {
+  const res = await fetch("/api/reminders?op=schedule", {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify(options ?? {}),
@@ -40,7 +40,7 @@ export async function scheduleHabitReminders(options?: {
 }
 
 export async function sendTestNtfyNotification(): Promise<void> {
-  const res = await fetch("/api/ntfy/test", {
+  const res = await fetch("/api/reminders?op=test", {
     method: "POST",
     headers: getHeaders(),
     body: "{}",
@@ -56,7 +56,7 @@ export async function sendHabitReminderPreview(options: {
   time?: string;
   variant?: "primary" | "followup";
 }): Promise<void> {
-  const res = await fetch("/api/ntfy/test", {
+  const res = await fetch("/api/reminders?op=test", {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({
