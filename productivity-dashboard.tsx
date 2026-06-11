@@ -132,6 +132,7 @@ type LegacyHabit = {
   completions: Record<string, boolean>;
   createdAt?: DateStr;
   deletedAt?: DateStr;
+  reminderTimes?: string[];
 };
 
 /** First day habit tracking counts — dates before this show "No data yet". */
@@ -673,18 +674,20 @@ function migrateHabits(habits: LegacyHabit[], weekStart: DateStr): Habit[] {
       const createdAt = inferCreatedAt(h);
       if (!isLegacyHabit(h)) {
         return normalizeHabit({
-          id: h.id,
-          name: h.name,
+          ...(h as Habit),
           completions: { ...h.completions },
           createdAt,
-          deletedAt: h.deletedAt,
         });
       }
       const completions: Record<DateStr, boolean> = {};
       for (const [key, val] of Object.entries(h.completions)) {
         if (val && key in keyToDate) completions[keyToDate[key as LegacyDayKey]] = true;
       }
-      return normalizeHabit({ id: h.id, name: h.name, completions, createdAt, deletedAt: h.deletedAt });
+      return normalizeHabit({
+        ...(h as Habit),
+        completions,
+        createdAt,
+      });
     })
   );
 }

@@ -7,6 +7,7 @@ export type DashboardState = {
     completions: Record<string, boolean>;
     createdAt: string;
     deletedAt?: string;
+    reminderTimes?: string[];
   }>;
   weeklyFocus: string;
   reward: string;
