@@ -12,6 +12,7 @@ import {
   getDeviceTimezone,
   NTFY_SUBSCRIBE_URL,
   sendHabitReminderPreview,
+  scheduleHabitReminders,
   sendTestNtfyNotification,
 } from "./src/lib/ntfy-notifications";
 import {
@@ -2255,7 +2256,7 @@ function HabitMasterEditor({
     setTestStatus(null);
     try {
       await sendHabitReminderPreview({ habitName, time, variant: "primary" });
-      setTestStatus(`Preview sent for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)} — check ntfy.`);
+      setTestStatus(`It times for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)}`);
     } catch (err) {
       setTestStatus(err instanceof Error ? err.message : "Reminder preview failed.");
     } finally {
@@ -2289,7 +2290,7 @@ function HabitMasterEditor({
       {habitsOpen && (
         <div className={`px-2 pb-2 pt-1 ${tabbed ? "flex min-h-0 flex-1 flex-col" : "border-t border-th-50"}`}>
           <p className="mb-2 shrink-0 text-[10px] leading-snug text-th-500">
-            Set a reminder time for each habit — ntfy pings at that time, then again 30 min later if it's still unchecked. Tap the time, then Save. Use the bell to preview a reminder.
+            Turn on reminders in the bell menu. Set a time, tap Save — ntfy pings at that exact time.
           </p>
           <div className="mb-1 flex shrink-0 justify-end">
             <button
@@ -2838,7 +2839,7 @@ function NotificationPanel({
                   Send test notification
                 </button>
                 <p className="text-[10px] leading-snug text-th-500">
-                  Tap a time to change it, then Save. Subscribe to <strong>Tracker</strong> in the{" "}
+                  Keep this enabled for scheduled habit pings. Subscribe to <strong>Tracker</strong> in the{" "}
                   <a href={NTFY_SUBSCRIBE_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-th-700 underline">
                     ntfy app
                   </a>{" "}
@@ -3103,7 +3104,16 @@ export default function ProductivityDashboard() {
   }));
   const [studyHours, setStudyHours] = useState<Record<DateStr, number>>({});
   const dayColumnsScrollRef = useRef<HTMLDivElement>(null);
-  const isHydrated = useRef(false);
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
+
+  const scheduleReminders = useCallback((nextHabits: Habit[]) => {
+    if (!notificationsRef.current.enabled) return;
+    void scheduleHabitReminders({
+      habits: nextHabits,
+      notifications: notificationsRef.current,
+    }).catch((err) => console.warn("Failed to schedule reminders:", err));
+  }, []);
   const latestSnapshotRef = useRef<DashboardState | null>(null);
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "offline">("idle");
@@ -3301,6 +3311,11 @@ export default function ProductivityDashboard() {
   }, [habits, weeklyFocus, reward, affirmation, weekStart, themeId, customAccent, themeManualDate, notifications, studyHours]);
 
   useEffect(() => {
+    if (!isHydrated.current || isLoading || !notifications.enabled) return;
+    scheduleReminders(habits);
+  }, [isLoading, notifications.enabled, habits, scheduleReminders]);
+
+  useEffect(() => {
     const flushOnExit = () => {
       const snapshot = latestSnapshotRef.current;
       if (snapshot) saveDashboardStateKeepalive(snapshot);
@@ -3332,12 +3347,14 @@ export default function ProductivityDashboard() {
 
   const updateHabitReminders = useCallback((habitId: string, reminderTimes: string[]) => {
     const sorted = sortReminderTimes(reminderTimes);
-    setHabits((prev) =>
-      prev.map((h) =>
+    setHabits((prev) => {
+      const next = prev.map((h) =>
         h.id === habitId ? { ...h, reminderTimes: sorted.length ? sorted : undefined } : h
-      )
-    );
-  }, []);
+      );
+      scheduleReminders(next);
+      return next;
+    });
+  }, [scheduleReminders]);
 
   const updateStudyHours = useCallback((date: DateStr, hours: number | null) => {
     if (!isStudyHoursEditable(date)) return;

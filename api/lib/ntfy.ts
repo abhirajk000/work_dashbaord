@@ -12,7 +12,7 @@ export function getNtfyTopicUrl(): string {
 export async function sendNtfyNotification(
   title: string,
   body: string,
-  options?: { click?: string; tags?: string; priority?: string }
+  options?: { click?: string; tags?: string; priority?: string; delay?: string; sequenceId?: string }
 ): Promise<void> {
   const click =
     options?.click ??
@@ -26,17 +26,22 @@ export async function sendNtfyNotification(
     .map((tag) => tag.trim())
     .filter(Boolean);
 
+  const payload: Record<string, unknown> = {
+    topic: NTFY_TOPIC,
+    title,
+    message: body,
+    tags,
+    click,
+    priority: Number(options?.priority ?? "3") || 3,
+  };
+
+  if (options?.delay) payload.delay = options.delay;
+  if (options?.sequenceId) payload.sequence_id = options.sequenceId;
+
   const res = await fetch(getNtfyBaseUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      topic: NTFY_TOPIC,
-      title,
-      message: body,
-      tags,
-      click,
-      priority: Number(options?.priority ?? "3") || 3,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {

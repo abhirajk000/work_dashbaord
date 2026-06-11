@@ -1,4 +1,4 @@
-import { NTFY_TOPIC } from "../../lib/notification-types";
+import { NTFY_TOPIC, type NotificationSettings } from "../../lib/notification-types";
 
 export const NTFY_SUBSCRIBE_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
@@ -14,6 +14,28 @@ export function getDeviceTimezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata";
   } catch {
     return "Asia/Kolkata";
+  }
+}
+
+export async function scheduleHabitReminders(options?: {
+  habits?: Array<{
+    id: string;
+    name: string;
+    completions: Record<string, boolean>;
+    createdAt: string;
+    deletedAt?: string;
+    reminderTimes?: string[];
+  }>;
+  notifications?: NotificationSettings;
+}): Promise<void> {
+  const res = await fetch("/api/reminders/schedule", {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify(options ?? {}),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `Schedule failed (${res.status})`);
   }
 }
 

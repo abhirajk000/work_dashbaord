@@ -10,6 +10,7 @@ const CRON_ROW_ID = "__cron__";
 const DATA_START_DATE = "2026-01-12";
 const MAX_CRON_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CRON_LOOKBACK_MS = 60 * 60 * 1000;
+const POLL_WINDOW_MS = 20 * 60 * 1000;
 
 type Habit = {
   id: string;
@@ -27,10 +28,17 @@ function getSql() {
 }
 
 function isCronAuthorized(req: VercelRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
   const auth = req.headers.authorization;
-  return auth === `Bearer ${secret}` || auth === secret;
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && (auth === `Bearer ${cronSecret}` || auth === cronSecret)) {
+    return true;
+  }
+  const apiKey = process.env.DASHBOARD_API_KEY;
+  if (apiKey && auth === `Bearer ${apiKey}`) {
+    return true;
+  }
+  if (!cronSecret) return process.env.NODE_ENV !== "production";
+  return false;
 }
 
 async function sendNtfy(title: string, body: string, tags = "bell"): Promise<void> {
@@ -129,7 +137,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sql = getSql();
     const now = new Date();
     const lastRun = await getLastCronRun();
-    const windowStart = new Date(Math.max(lastRun.getTime(), now.getTime() - MAX_CRON_WINDOW_MS));
+    const windowStart = new Date(
+      Math.max(
+        Math.min(lastRun.getTime(), now.getTime() - POLL_WINDOW_MS),
+        now.getTime() - MAX_CRON_WINDOW_MS
+      )
+    );
 
     const stateRows = await sql`SELECT data FROM dashboard_state WHERE id = ${ROW_ID}`;
     const state =

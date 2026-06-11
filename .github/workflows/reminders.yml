@@ -1,0 +1,15 @@
+name: Habit reminders
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run reminder cron
+        run: |
+          curl -sfS -H "Authorization: Bearer ${{ secrets.DASHBOARD_API_KEY }}" \
+            "https://work-raaz-0.vercel.app/api/cron/reminders"
