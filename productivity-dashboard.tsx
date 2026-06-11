@@ -347,16 +347,6 @@ const APP_TIMEZONE = "Asia/Kolkata";
 
 const istDisplayFormat = { timeZone: APP_TIMEZONE } as const;
 
-const IST_WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
-
 function getIstDateParts(date = new Date()): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: APP_TIMEZONE,
@@ -397,12 +387,12 @@ function getTodayStr(): DateStr {
   return dateStrFromParts(year, month, day);
 }
 
-function getWeekdayIndexIST(dateStr: DateStr): number {
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIMEZONE,
-    weekday: "short",
-  }).format(parseDateStr(dateStr));
-  return IST_WEEKDAY_INDEX[weekday] ?? 0;
+/** Sunday = 0 … Saturday = 6 — pure calendar math, no timezone drift */
+function getWeekdayIndex(dateStr: DateStr): number {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+  const y = month < 3 ? year - 1 : year;
+  return (y + Math.floor(y / 4) - Math.floor(y / 100) + Math.floor(y / 400) + t[month - 1] + day) % 7;
 }
 
 function addDays(dateStr: DateStr, delta: number): DateStr {
@@ -440,13 +430,23 @@ function shiftWeekStart(weekStart: DateStr, delta: number): DateStr {
 }
 
 function getWeekStartForDate(date: DateStr): DateStr {
-  const dayOfWeek = getWeekdayIndexIST(date);
+  const dayOfWeek = getWeekdayIndex(date);
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   return addDays(date, diffToMonday);
 }
 
-function dateFromMonthDay(year: number, month: number, dayIndex: number): DateStr {
-  return dateStrFromParts(year, month + 1, dayIndex + 1);
+function dateFromMonthDay(year: number, month: number, dayOfMonth: number): DateStr {
+  return dateStrFromParts(year, month + 1, dayOfMonth);
+}
+
+function formatDateTip(dateStr: DateStr): string {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...istDisplayFormat,
+  });
 }
 
 function formatWeekRange(weekDays: WeekDay[]): string {
@@ -685,7 +685,7 @@ function buildCurrentMonthGrid(habits: Habit[]): MonthGrid {
   const [year, month] = todayStr.split("-").map(Number);
   const monthIndex = month - 1;
   const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-  const startOffset = getWeekdayIndexIST(dateStrFromParts(year, month, 1));
+  const startOffset = getWeekdayIndex(dateStrFromParts(year, month, 1));
 
   const flat: (HeatmapCell | null)[] = [];
   for (let i = 0; i < startOffset; i++) flat.push(null);
@@ -899,12 +899,7 @@ function MonthlyActivityGrid({
                 const dayNum = Number(cell.date.slice(8, 10));
                 const status = getMonthCalDayStatus(habits, cell, todayStr);
                 const isSelected = cell.date === selectedDate;
-                const tip = parseDateStr(cell.date).toLocaleDateString("en-US", {
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                  ...istDisplayFormat,
-                });
+                const tip = formatDateTip(cell.date);
 
                 return (
                   <button
@@ -1230,7 +1225,7 @@ function MonthBarChart({
   labels: string[];
   todayIndex: number;
   maxHabits: number;
-  onBarClick?: (dayIndex: number) => void;
+  onBarClick?: (dayOfMonth: number) => void;
 }) {
   const max = Math.max(...counts, maxHabits, 1);
   const barMaxH = 88;
@@ -1260,7 +1255,7 @@ function MonthBarChart({
             title={`Day ${labels[i]}: ${pct}% (${c}/${dayTotal})`}
             onClick={(e) => {
               e.stopPropagation();
-              onBarClick?.(i);
+              onBarClick?.(Number(labels[i]));
             }}
             className="month-bar-chart-col group flex min-w-0 flex-1 flex-col items-center border-none bg-transparent p-0"
           >
@@ -1477,7 +1472,7 @@ function OverallProgressPanel({
   onToggleView: () => void;
   onPrevMonth: () => void;
   onNextMonth: () => void;
-  onMonthBarClick: (dayIndex: number) => void;
+  onMonthBarClick: (dayOfMonth: number) => void;
   weekCounts: number[];
   weekTotals: number[];
   weekLabels: string[];
@@ -2184,9 +2179,6 @@ export default function ProductivityDashboard() {
     setFocusedDate(date);
     const [y, m] = date.split("-").map(Number);
     setProgressMonth({ year: y, month: m - 1 });
-    window.setTimeout(() => {
-      dayColumnsScrollRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 60);
   }, []);
 
   useEffect(() => {
@@ -2216,7 +2208,7 @@ export default function ProductivityDashboard() {
 
   const applyLoadedState = useCallback((saved: DashboardState | null | undefined) => {
     if (saved) {
-      let ws = saved.weekStart ?? getDefaultWeekStart();
+      let ws = getWeekStartForDate(saved.weekStart ?? getDefaultWeekStart());
       if (!weekContainsDate(ws, getTodayStr())) {
         ws = getDefaultWeekStart();
       }
@@ -2384,8 +2376,8 @@ export default function ProductivityDashboard() {
       onToggleView={() => setProgressView((v) => (v === "week" ? "month" : "week"))}
       onPrevMonth={() => setProgressMonth((m) => shiftMonth(m.year, m.month, -1))}
       onNextMonth={() => setProgressMonth((m) => shiftMonth(m.year, m.month, 1))}
-      onMonthBarClick={(dayIndex) =>
-        focusDay(dateFromMonthDay(progressMonth.year, progressMonth.month, dayIndex))
+      onMonthBarClick={(dayOfMonth) =>
+        focusDay(dateFromMonthDay(progressMonth.year, progressMonth.month, dayOfMonth))
       }
       weekCounts={barCounts}
       weekTotals={barTotals}
