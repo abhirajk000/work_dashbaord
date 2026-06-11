@@ -12,6 +12,7 @@ import {
   getDeviceTimezone,
   NTFY_SUBSCRIBE_URL,
   sendHabitReminderTest,
+  sendScheduledTestNtfyNotification,
   sendTestNtfyNotification,
 } from "./src/lib/ntfy-notifications";
 import {
@@ -2725,6 +2726,19 @@ function NotificationPanel({
     }
   };
 
+  const handleScheduledTest = async () => {
+    setStatus(null);
+    setBusy(true);
+    try {
+      await sendScheduledTestNtfyNotification(2);
+      setStatus("Test scheduled for 2 minutes from now — keep ntfy subscribed to Tracker.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Scheduled test failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <button
@@ -2829,14 +2843,24 @@ function NotificationPanel({
 
             
 
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handleTest()}
-                  className="w-full rounded-xl border border-th-200 bg-white px-3 py-2 text-xs font-semibold text-th-700 transition hover:bg-th-50 disabled:opacity-50"
-                >
-                  Send test notification
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleTest()}
+                    className="flex-1 rounded-xl border border-th-200 bg-white px-3 py-2 text-xs font-semibold text-th-700 transition hover:bg-th-50 disabled:opacity-50"
+                  >
+                    Send now
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleScheduledTest()}
+                    className="flex-1 rounded-xl bg-grad-th-btn px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:opacity-90 disabled:opacity-50"
+                  >
+                    Test in 2 min
+                  </button>
+                </div>
                 <p className="text-[10px] leading-snug text-th-500">
                   Tap a time to change it, then Save. Subscribe to <strong>Tracker</strong> in the{" "}
                   <a href={NTFY_SUBSCRIBE_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-th-700 underline">

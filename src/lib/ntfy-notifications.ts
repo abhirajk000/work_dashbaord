@@ -17,16 +17,20 @@ export function getDeviceTimezone(): string {
   }
 }
 
-export async function sendTestNtfyNotification(): Promise<void> {
+export async function sendTestNtfyNotification(options?: { delayMinutes?: number }): Promise<void> {
   const res = await fetch("/api/ntfy/test", {
     method: "POST",
     headers: getHeaders(),
-    body: "{}",
+    body: JSON.stringify(options?.delayMinutes ? { delayMinutes: options.delayMinutes } : {}),
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error ?? `Test failed (${res.status})`);
   }
+}
+
+export async function sendScheduledTestNtfyNotification(delayMinutes = 2): Promise<void> {
+  await sendTestNtfyNotification({ delayMinutes });
 }
 
 export async function sendHabitReminderTest(options: {
