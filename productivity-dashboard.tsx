@@ -330,13 +330,7 @@ const DEFAULT_HABITS: Habit[] = [
 ].map((name, i) => ({ id: `habit-${i}`, name, completions: {}, createdAt: HABIT_EPOCH }));
 
 function getDefaultWeekStart(): DateStr {
-  const ref = new Date();
-  const dayOfWeek = ref.getDay();
-  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  const monday = new Date(ref);
-  monday.setHours(0, 0, 0, 0);
-  monday.setDate(ref.getDate() + diffToMonday);
-  return toDateStr(monday);
+  return getWeekStartForDate(getTodayStr());
 }
 
 const DEFAULT_STATE: DashboardState = {
@@ -349,20 +343,84 @@ const DEFAULT_STATE: DashboardState = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+const APP_TIMEZONE = "Asia/Kolkata";
+
+const istDisplayFormat = { timeZone: APP_TIMEZONE } as const;
+
+const IST_WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+function getIstDateParts(date = new Date()): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  return {
+    year: Number(parts.find((p) => p.type === "year")?.value ?? 0),
+    month: Number(parts.find((p) => p.type === "month")?.value ?? 1),
+    day: Number(parts.find((p) => p.type === "day")?.value ?? 1),
+  };
+}
+
+function dateStrFromParts(year: number, month: number, day: number): DateStr {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function getCurrentMonthYear(): { year: number; month: number } {
+  const { year, month } = getIstDateParts();
+  return { year, month: month - 1 };
+}
+
 function toDateStr(d: Date): DateStr {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
 function parseDateStr(s: DateStr): Date {
   const [y, m, d] = s.split("-").map(Number);
-  return new Date(y, m - 1, d);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 }
 
 function getTodayStr(): DateStr {
-  return toDateStr(new Date());
+  const { year, month, day } = getIstDateParts();
+  return dateStrFromParts(year, month, day);
+}
+
+function getWeekdayIndexIST(dateStr: DateStr): number {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    weekday: "short",
+  }).format(parseDateStr(dateStr));
+  return IST_WEEKDAY_INDEX[weekday] ?? 0;
+}
+
+function addDays(dateStr: DateStr, delta: number): DateStr {
+  const d = parseDateStr(dateStr);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return toDateStr(d);
+}
+
+function weekContainsDate(weekStart: DateStr, date: DateStr): boolean {
+  return date >= weekStart && date <= addDays(weekStart, 6);
+}
+
+function formatMonthShortIST(dateStr: DateStr): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).toLocaleDateString("en-US", {
+    month: "short",
+    timeZone: APP_TIMEZONE,
+  });
 }
 
 function isEditableDate(date: DateStr): boolean {
@@ -378,23 +436,17 @@ function isFutureDate(date: DateStr): boolean {
 }
 
 function shiftWeekStart(weekStart: DateStr, delta: number): DateStr {
-  const d = parseDateStr(weekStart);
-  d.setDate(d.getDate() + delta * 7);
-  return toDateStr(d);
+  return addDays(weekStart, delta * 7);
 }
 
 function getWeekStartForDate(date: DateStr): DateStr {
-  const d = parseDateStr(date);
-  const dayOfWeek = d.getDay();
+  const dayOfWeek = getWeekdayIndexIST(date);
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  const monday = new Date(d);
-  monday.setHours(0, 0, 0, 0);
-  monday.setDate(d.getDate() + diffToMonday);
-  return toDateStr(monday);
+  return addDays(date, diffToMonday);
 }
 
 function dateFromMonthDay(year: number, month: number, dayIndex: number): DateStr {
-  return toDateStr(new Date(year, month, dayIndex + 1));
+  return dateStrFromParts(year, month + 1, dayIndex + 1);
 }
 
 function formatWeekRange(weekDays: WeekDay[]): string {
@@ -405,18 +457,15 @@ function formatWeekRange(weekDays: WeekDay[]): string {
 }
 
 function getWeekDays(weekStart: DateStr): WeekDay[] {
-  const monday = parseDateStr(weekStart);
-  monday.setHours(0, 0, 0, 0);
-
   return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
+    const date = addDays(weekStart, i);
+    const dayNum = Number(date.slice(8, 10));
     return {
-      date: toDateStr(d),
+      date,
       label: WEEKDAY_LABELS[i],
       short: WEEKDAY_SHORTS[i],
-      dayNum: d.getDate(),
-      monthShort: d.toLocaleDateString("en-US", { month: "short" }),
+      dayNum,
+      monthShort: formatMonthShortIST(date),
       dayIndex: i,
     };
   });
@@ -519,10 +568,10 @@ function isPerfectDay(habits: Habit[], date: DateStr): boolean {
 
 function countPerfectDaysInMonth(habits: Habit[], year: number, month: number): number {
   const today = getTodayStr();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   let count = 0;
   for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = toDateStr(new Date(year, month, day));
+    const dateStr = dateStrFromParts(year, month + 1, day);
     if (dateStr > today) break;
     if (isPerfectDay(habits, dateStr)) count++;
   }
@@ -566,7 +615,7 @@ type MonthBarStats = {
 };
 
 function getMonthBarStats(habits: Habit[], year: number, month: number): MonthBarStats {
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const today = getTodayStr();
   const counts: number[] = [];
   const totals: number[] = [];
@@ -579,7 +628,7 @@ function getMonthBarStats(habits: Habit[], year: number, month: number): MonthBa
   let daysElapsed = 0;
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = toDateStr(new Date(year, month, day));
+    const dateStr = dateStrFromParts(year, month + 1, day);
     const done = getDayDoneCount(habits, dateStr);
     const active = getActiveHabitCount(habits, dateStr);
     counts.push(done);
@@ -595,7 +644,7 @@ function getMonthBarStats(habits: Habit[], year: number, month: number): MonthBa
     if (dateStr === today) todayIndex = day - 1;
   }
 
-  const ref = new Date(year, month, 1);
+  const ref = parseDateStr(dateStrFromParts(year, month + 1, 1));
   return {
     counts,
     totals,
@@ -606,13 +655,14 @@ function getMonthBarStats(habits: Habit[], year: number, month: number): MonthBa
     perfectDays,
     avgPercent: daysElapsed > 0 ? Math.round(percentSum / daysElapsed) : 0,
     daysElapsed,
-    monthLabel: ref.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    monthLabel: ref.toLocaleDateString("en-US", { month: "long", year: "numeric", ...istDisplayFormat }),
   };
 }
 
 function shiftMonth(year: number, month: number, delta: number): { year: number; month: number } {
-  const d = new Date(year, month + delta, 1);
-  return { year: d.getFullYear(), month: d.getMonth() };
+  const d = parseDateStr(dateStrFromParts(year, month + 1, 1));
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() };
 }
 
 type HeatmapCell = {
@@ -632,18 +682,16 @@ type MonthGrid = {
 
 function buildCurrentMonthGrid(habits: Habit[]): MonthGrid {
   const todayStr = getTodayStr();
-  const today = parseDateStr(todayStr);
-  const year = today.getFullYear();
-  const month = today.getMonth();
-  const monthRef = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const startOffset = monthRef.getDay();
+  const [year, month] = todayStr.split("-").map(Number);
+  const monthIndex = month - 1;
+  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const startOffset = getWeekdayIndexIST(dateStrFromParts(year, month, 1));
 
   const flat: (HeatmapCell | null)[] = [];
   for (let i = 0; i < startOffset; i++) flat.push(null);
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = toDateStr(new Date(year, month, day));
+    const dateStr = dateStrFromParts(year, month, day);
     const done = getDayDoneCount(habits, dateStr);
     flat.push({
       date: dateStr,
@@ -661,8 +709,12 @@ function buildCurrentMonthGrid(habits: Habit[]): MonthGrid {
 
   return {
     year,
-    month,
-    label: monthRef.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    month: monthIndex,
+    label: parseDateStr(dateStrFromParts(year, month, 1)).toLocaleDateString("en-US", {
+      month: "long",
+      year: "numeric",
+      ...istDisplayFormat,
+    }),
     isCurrent: true,
     rows,
   };
@@ -685,11 +737,7 @@ function collectQualifiedDates(habits: Habit[]): Set<DateStr> {
 function computeCurrentStreak(qualifying: Set<DateStr>): number {
   if (qualifying.size === 0) return 0;
   const today = getTodayStr();
-  const yesterday = toDateStr((() => {
-    const d = parseDateStr(today);
-    d.setDate(d.getDate() - 1);
-    return d;
-  })());
+  const yesterday = addDays(today, -1);
 
   let start = today;
   if (!qualifying.has(today)) {
@@ -698,10 +746,10 @@ function computeCurrentStreak(qualifying: Set<DateStr>): number {
   }
 
   let streak = 0;
-  const cursor = parseDateStr(start);
-  while (qualifying.has(toDateStr(cursor))) {
+  let cursor = start;
+  while (qualifying.has(cursor)) {
     streak++;
-    cursor.setDate(cursor.getDate() - 1);
+    cursor = addDays(cursor, -1);
   }
   return streak;
 }
@@ -848,13 +896,14 @@ function MonthlyActivityGrid({
                   return <div key={ci} className="month-cal-cell month-cal-cell--empty" aria-hidden />;
                 }
 
-                const dayNum = parseDateStr(cell.date).getDate();
+                const dayNum = Number(cell.date.slice(8, 10));
                 const status = getMonthCalDayStatus(habits, cell, todayStr);
                 const isSelected = cell.date === selectedDate;
                 const tip = parseDateStr(cell.date).toLocaleDateString("en-US", {
                   weekday: "short",
                   month: "short",
                   day: "numeric",
+                  ...istDisplayFormat,
                 });
 
                 return (
@@ -2091,10 +2140,7 @@ export default function ProductivityDashboard() {
   const [weekStart, setWeekStart] = useState(DEFAULT_STATE.weekStart);
   const [isLoading, setIsLoading] = useState(true);
   const [progressView, setProgressView] = useState<ProgressView>("week");
-  const [progressMonth, setProgressMonth] = useState(() => {
-    const n = new Date();
-    return { year: n.getFullYear(), month: n.getMonth() };
-  });
+  const [progressMonth, setProgressMonth] = useState(getCurrentMonthYear);
   const [focusedDate, setFocusedDate] = useState<DateStr | null>(null);
   const [habitsEditorOpen, setHabitsEditorOpen] = useState(true);
   const [managePanelView, setManagePanelView] = useState<ManagePanelView>("habits");
@@ -2128,18 +2174,16 @@ export default function ProductivityDashboard() {
     [habits, progressMonth.year, progressMonth.month]
   );
   const perfectDaysThisMonth = useMemo(() => {
-    const now = new Date();
-    return countPerfectDaysInMonth(habits, now.getFullYear(), now.getMonth());
+    const { year, month } = getCurrentMonthYear();
+    return countPerfectDaysInMonth(habits, year, month);
   }, [habits]);
   const weekPerfectDays = useMemo(() => countPerfectDaysInWeek(habits, weekDays), [habits, weekDays]);
 
   const focusDay = useCallback((date: DateStr) => {
     setWeekStart(getWeekStartForDate(date));
     setFocusedDate(date);
-    setProgressMonth({
-      year: parseDateStr(date).getFullYear(),
-      month: parseDateStr(date).getMonth(),
-    });
+    const [y, m] = date.split("-").map(Number);
+    setProgressMonth({ year: y, month: m - 1 });
     window.setTimeout(() => {
       dayColumnsScrollRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);
@@ -2172,7 +2216,10 @@ export default function ProductivityDashboard() {
 
   const applyLoadedState = useCallback((saved: DashboardState | null | undefined) => {
     if (saved) {
-      const ws = saved.weekStart ?? getDefaultWeekStart();
+      let ws = saved.weekStart ?? getDefaultWeekStart();
+      if (!weekContainsDate(ws, getTodayStr())) {
+        ws = getDefaultWeekStart();
+      }
       const loadedThemeId = normalizeThemeId(saved.themeId);
       const loadedAccent = saved.customAccent ?? DEFAULT_CUSTOM_ACCENT;
       setWeekStart(ws);
