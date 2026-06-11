@@ -3104,6 +3104,7 @@ export default function ProductivityDashboard() {
   }));
   const [studyHours, setStudyHours] = useState<Record<DateStr, number>>({});
   const dayColumnsScrollRef = useRef<HTMLDivElement>(null);
+  const isHydrated = useRef(false);
   const notificationsRef = useRef(notifications);
   notificationsRef.current = notifications;
 
