@@ -1,4 +1,4 @@
-import type { NotificationSettings } from "./notification-types";
+import type { NotificationSettings } from "./notification-types.js";
 
 export type DashboardState = {
   habits: Array<{

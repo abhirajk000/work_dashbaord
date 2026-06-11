@@ -1,4 +1,4 @@
-import { GREEN_PERCENT } from "./notification-types";
+import { GREEN_PERCENT } from "./notification-types.js";
 
 export type Habit = {
   id: string;

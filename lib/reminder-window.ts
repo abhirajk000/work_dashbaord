@@ -1,4 +1,4 @@
-import { normalizeTimeValue } from "./time-utils";
+import { normalizeTimeValue } from "./time-utils.js";
 
 export function getDateInTimezone(date: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-CA", {

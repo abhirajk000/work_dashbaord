@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import type { DashboardState } from "./dashboard-types";
+import type { DashboardState } from "./dashboard-types.js";
 
 const ROW_ID = "default";
 

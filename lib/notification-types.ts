@@ -1,4 +1,4 @@
-import { normalizeTimeValue } from "./time-utils";
+import { normalizeTimeValue } from "./time-utils.js";
 
 /** Habit completion goal — must match the dashboard constant. */
 export const GREEN_PERCENT = 70;
