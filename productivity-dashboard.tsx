@@ -3419,7 +3419,7 @@ export default function ProductivityDashboard({
   const [progressMonth, setProgressMonth] = useState(getCurrentMonthYear);
   const [focusedDate, setFocusedDate] = useState<DateStr | null>(null);
   const [habitsEditorOpen, setHabitsEditorOpen] = useState(true);
-  const [managePanelView, setManagePanelView] = useState<ManagePanelView>("habits");
+  const [managePanelView, setManagePanelView] = useState<ManagePanelView>("activity");
   const [mobileInsightsSheet, setMobileInsightsSheet] = useState<MobileInsightsTab | null>(null);
   const [themeId, setThemeId] = useState<ThemeId>(() => getDailyTheme().themeId);
   const [customAccent, setCustomAccent] = useState(() => getDailyTheme().customAccent);
