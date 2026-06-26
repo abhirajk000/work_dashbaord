@@ -9,9 +9,12 @@ import {
   type NotificationSettings,
 } from "./lib/notification-types";
 import { formatTimeDisplay, normalizeReminderTimes, normalizeTimeValue, sortReminderTimes } from "./lib/time-utils";
+import { formatTrackerDisplayName } from "./lib/username";
 import {
   getDeviceTimezone,
-  NTFY_SUBSCRIBE_URL,
+  getNtfySubscribeUrl,
+  getNtfyTopicName,
+  NTFY_APP_DOWNLOAD_URL,
   sendHabitReminderPreview,
   scheduleHabitReminders,
   sendTestNtfyNotification,
@@ -42,6 +45,9 @@ import {
   Bell,
   BellRing,
   Clock,
+  Smartphone,
+  Copy,
+  CheckCheck,
 } from "lucide-react";
 
 const GREEN_PERCENT = 70;
@@ -160,10 +166,13 @@ const LEGACY_DUMMY_HABIT_NAMES = new Set([
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = "productivity-dashboard-v2";
 const LEGACY_STORAGE_KEY = "productivity-dashboard-v1";
 const PIN_MIN_LEN = 4;
 const PIN_MAX_LEN = 6;
+
+function storageKeyForUser(username: string): string {
+  return `productivity-dashboard-v2:${username}`;
+}
 
 const WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WEEKDAY_SHORTS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1447,7 +1456,7 @@ function DayCardHeader({
       ? [
           "day-card-header-tinted",
           "day-card-header-today",
-          isFocused ? "day-card-header-focused ring-2 ring-white/70 ring-offset-2 ring-offset-th-page" : "",
+          isFocused || isToday ? "day-card-header-focused ring-2 ring-red-400/80 ring-offset-2 ring-offset-th-page" : "",
         ]
           .filter(Boolean)
           .join(" ")
@@ -2052,7 +2061,7 @@ function TaskCheck({
   if (locked) {
     return (
       <div
-        className={`habit-slot-h flex items-center gap-2.5 rounded-md px-1.5 ${
+        className={`habit-slot-h habit-slot-item flex items-center gap-2.5 rounded-md px-1.5 ${
           checked ? "bg-th-100-40" : ""
         }`}
       >
@@ -2075,7 +2084,7 @@ function TaskCheck({
       onClick={onToggle}
       aria-checked={checked}
       role="checkbox"
-      className={`group habit-slot-h flex w-full items-center gap-2.5 rounded-md px-1.5 text-left transition-all active:scale-[0.98] ${
+      className={`group habit-slot-h habit-slot-item flex w-full items-center gap-2.5 rounded-md px-1.5 text-left transition-all active:scale-[0.98] ${
         checked ? "bg-th-100-60" : "hover:bg-white/70"
       }`}
     >
@@ -2112,7 +2121,7 @@ function DayHabitSlots({
 
   return (
     <div className="habit-slots-wrap shrink-0 p-1.5 md:p-1">
-      <div className="habit-slots-stack relative flex flex-col gap-px">
+      <div className="habit-slots-stack relative flex flex-col gap-1">
         {Array.from({ length: MAX_HABITS }, (_, index) => {
           const habit = tracking ? dayHabits[index] : undefined;
           if (habit) {
@@ -2233,6 +2242,8 @@ function ReminderTimeField({
 // ─── Habit master editor (collapsible) ───────────────────────────────────────
 
 function HabitMasterEditor({
+  username,
+  legacyRoot = false,
   habits,
   activeCount,
   open,
@@ -2245,6 +2256,8 @@ function HabitMasterEditor({
   embedded = false,
   tabbed = false,
 }: {
+  username: string;
+  legacyRoot?: boolean;
   habits: Habit[];
   activeCount: number;
   open: boolean;
@@ -2265,7 +2278,7 @@ function HabitMasterEditor({
     setTestingKey(key);
     setTestStatus(null);
     try {
-      await sendHabitReminderPreview({ habitName, time, variant: "primary" });
+      await sendHabitReminderPreview(username, { habitName, time, variant: "primary" }, legacyRoot);
       setTestStatus(`It times for "${habitName.trim() || "your habit"}" at ${formatTimeDisplay(time)}`);
     } catch (err) {
       setTestStatus(err instanceof Error ? err.message : "Reminder preview failed.");
@@ -2300,7 +2313,8 @@ function HabitMasterEditor({
       {habitsOpen && (
         <div className={`px-2 pb-2 pt-1 ${tabbed ? "flex min-h-0 flex-1 flex-col" : "border-t border-th-50"}`}>
           <p className="mb-2 shrink-0 text-[10px] leading-snug text-th-500">
-            Turn on reminders in the bell menu. Enable browser push or use the ntfy app (Tracker). Set a time, then Save.
+            Turn on reminders in the bell menu. In the ntfy app, subscribe to{" "}
+            <strong>{getNtfyTopicName(username)}</strong>, then set habit times below.
           </p>
           <div className="mb-1 flex shrink-0 justify-end">
             <button
@@ -2546,6 +2560,8 @@ function MobileInsightsSheet({
 }
 
 function ManageHabitsActivityPanel({
+  username,
+  legacyRoot = false,
   view,
   onViewChange,
   activeCount,
@@ -2561,6 +2577,8 @@ function ManageHabitsActivityPanel({
   selectedDate,
   inSheet = false,
 }: {
+  username: string;
+  legacyRoot?: boolean;
   view: ManagePanelView;
   onViewChange: (view: ManagePanelView) => void;
   activeCount: number;
@@ -2596,6 +2614,8 @@ function ManageHabitsActivityPanel({
 
       {view === "habits" ? (
         <HabitMasterEditor
+          username={username}
+          legacyRoot={legacyRoot}
           habits={habits}
           activeCount={activeCount}
           open={habitsEditorOpen}
@@ -2647,9 +2667,13 @@ function ThemeSwatch({ preset }: { preset: ThemePresetDef }) {
 const NOTIFICATION_MENU_WIDTH = 300;
 
 function NotificationPanel({
+  username,
+  legacyRoot = false,
   settings,
   onChange,
 }: {
+  username: string;
+  legacyRoot?: boolean;
   settings: NotificationSettings;
   onChange: (next: NotificationSettings) => void;
 }) {
@@ -2657,7 +2681,10 @@ function NotificationPanel({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [webPushState, setWebPushState] = useState<"unknown" | "subscribed" | "not-subscribed" | "denied" | "unsupported">("unknown");
+  const [topicCopied, setTopicCopied] = useState(false);
   const webPushSupported = isWebPushSupported();
+  const ntfyTopic = getNtfyTopicName(username);
+  const ntfySubscribeUrl = getNtfySubscribeUrl(username);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, bottom: undefined as number | undefined });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2719,7 +2746,7 @@ function NotificationPanel({
         return;
       }
       if (permission === "granted") {
-        const synced = await syncWebPushSubscription();
+        const synced = await syncWebPushSubscription(username, legacyRoot);
         setWebPushState(synced === "subscribed" ? "subscribed" : "not-subscribed");
         return;
       }
@@ -2759,7 +2786,7 @@ function NotificationPanel({
       setBusy(true);
     }
     try {
-      const result = await subscribeWebPush();
+      const result = await subscribeWebPush(username, legacyRoot);
       if (result === "subscribed") {
         setWebPushState("subscribed");
         if (!quiet) setStatus("Browser notifications enabled.");
@@ -2781,7 +2808,7 @@ function NotificationPanel({
     setStatus(null);
     setBusy(true);
     try {
-      await unsubscribeWebPush();
+      await unsubscribeWebPush(username, legacyRoot);
       setWebPushState("not-subscribed");
       setStatus("Browser notifications turned off.");
     } catch (err) {
@@ -2791,11 +2818,21 @@ function NotificationPanel({
     }
   };
 
+  const handleCopyTopic = async () => {
+    try {
+      await navigator.clipboard.writeText(ntfyTopic);
+      setTopicCopied(true);
+      window.setTimeout(() => setTopicCopied(false), 2000);
+    } catch {
+      setStatus("Could not copy topic.");
+    }
+  };
+
   const handleTest = async () => {
     setStatus(null);
     setBusy(true);
     try {
-      await sendTestNtfyNotification();
+      await sendTestNtfyNotification(username, legacyRoot);
       setStatus("Test sent via ntfy and browser push (if enabled).");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Notification failed.");
@@ -2866,6 +2903,67 @@ function NotificationPanel({
                   className="h-4 w-4 accent-th-600"
                 />
               </label>
+
+              <div className="mb-3 rounded-xl border border-th-100 bg-th-50/60 px-3 py-2.5">
+                <div className="mb-2 flex items-center gap-2">
+                  <Smartphone size={14} className="text-th-600" aria-hidden />
+                  <span className="text-xs font-semibold text-th-700">ntfy app (recommended)</span>
+                </div>
+                <ol className="space-y-1.5 text-[10px] leading-snug text-th-600">
+                  <li>
+                    1. Install{" "}
+                    <a
+                      href={NTFY_APP_DOWNLOAD_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-th-700 underline"
+                    >
+                      ntfy
+                    </a>{" "}
+                    on iPhone, Android, Mac, or Windows
+                  </li>
+                  <li>
+                    2.{" "}
+                    {legacyRoot ? (
+                      <>
+                        Keep your existing ntfy subscription to <strong className="font-mono text-th-800">{ntfyTopic}</strong>
+                      </>
+                    ) : (
+                      <>
+                        Open the app → tap <strong>+</strong> → subscribe to your private topic{" "}
+                        <strong className="font-mono text-th-800">{ntfyTopic}</strong> (only you get these)
+                      </>
+                    )}
+                  </li>
+                  <li>3. Enable reminders below and send a test</li>
+                </ol>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <a
+                    href={NTFY_APP_DOWNLOAD_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-lg bg-grad-th-btn px-2.5 py-1.5 text-[10px] font-bold text-white"
+                  >
+                    Download ntfy
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyTopic()}
+                    className="inline-flex items-center gap-1 rounded-lg border border-th-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-th-700 hover:bg-th-50"
+                  >
+                    {topicCopied ? <CheckCheck size={11} /> : <Copy size={11} />}
+                    {topicCopied ? "Copied" : "Copy topic"}
+                  </button>
+                  <a
+                    href={ntfySubscribeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-lg border border-th-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-th-700 hover:bg-th-50"
+                  >
+                    Open topic
+                  </a>
+                </div>
+              </div>
 
               {webPushSupported && (
                 <div className="mb-3 rounded-xl border border-th-100 bg-th-50/60 px-3 py-2.5">
@@ -2951,7 +3049,7 @@ function NotificationPanel({
                   Send test notification
                 </button>
                 <p className="text-[10px] leading-snug text-th-500">
-                  Reminders go to <strong>ntfy (Tracker)</strong> and your browser if enabled. On iPhone, add Tracker to your Home Screen for browser push.
+                  Reminders go to <strong>ntfy ({ntfyTopic})</strong> and your browser if enabled. On iPhone, you can also add Tracker to your Home Screen for browser push.
                 </p>
               </div>
 
@@ -3184,7 +3282,17 @@ function isCompletePin(pin: string): boolean {
   return pin.length >= PIN_MIN_LEN && pin.length <= PIN_MAX_LEN;
 }
 
-function PinGate({ onSuccess }: { onSuccess: () => void }) {
+function PinGate({
+  username,
+  personalized,
+  legacyRoot = false,
+  onSuccess,
+}: {
+  username: string;
+  personalized?: boolean;
+  legacyRoot?: boolean;
+  onSuccess: () => void;
+}) {
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -3200,7 +3308,7 @@ function PinGate({ onSuccess }: { onSuccess: () => void }) {
 
     setBusy(true);
     try {
-      const ok = await verifyPinRemote(pin);
+      const ok = await verifyPinRemote(username, pin, legacyRoot);
       setPin("");
       if (!ok) {
         setError("Incorrect code. Try again.");
@@ -3222,8 +3330,18 @@ function PinGate({ onSuccess }: { onSuccess: () => void }) {
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-th-50 text-th-700">
             <Lock size={22} strokeWidth={2.25} aria-hidden />
           </div>
-          <h1 className="text-lg font-extrabold tracking-tight text-th-800">Unlock Tracker</h1>
-          <p className="text-xs font-medium text-th-500">Enter your access code to continue.</p>
+          <h1 className="text-lg font-extrabold tracking-tight text-th-800">
+            Unlock {formatTrackerDisplayName(username, legacyRoot)}
+          </h1>
+          <p className="text-xs font-medium text-th-500">
+            {personalized ? (
+              <>
+                Enter the PIN for <strong>{username}</strong>.
+              </>
+            ) : (
+              "Enter your access code to continue."
+            )}
+          </p>
         </div>
 
         <form className="space-y-3" onSubmit={(e) => void handleSubmit(e)}>
@@ -3283,7 +3401,13 @@ function LoadingScreen() {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-export default function ProductivityDashboard() {
+export default function ProductivityDashboard({
+  username,
+  personalizedPin = true,
+}: {
+  username: string;
+  personalizedPin?: boolean;
+}) {
   const [habits, setHabits] = useState<Habit[]>(DEFAULT_HABITS);
   const [weeklyFocus, setWeeklyFocus] = useState(DEFAULT_STATE.weeklyFocus);
   const [reward, setReward] = useState(DEFAULT_STATE.reward);
@@ -3310,13 +3434,20 @@ export default function ProductivityDashboard() {
   const notificationsRef = useRef(notifications);
   notificationsRef.current = notifications;
 
+  const legacyRoot = !personalizedPin;
+  const storageKey = storageKeyForUser(username);
+
   const scheduleReminders = useCallback((nextHabits: Habit[]) => {
     if (!notificationsRef.current.enabled) return;
-    void scheduleHabitReminders({
-      habits: nextHabits,
-      notifications: notificationsRef.current,
-    }).catch((err) => console.warn("Failed to schedule reminders:", err));
-  }, []);
+    void scheduleHabitReminders(
+      username,
+      {
+        habits: nextHabits,
+        notifications: notificationsRef.current,
+      },
+      legacyRoot
+    ).catch((err) => console.warn("Failed to schedule reminders:", err));
+  }, [username, legacyRoot]);
   const latestSnapshotRef = useRef<DashboardState | null>(null);
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "offline">("idle");
@@ -3425,7 +3556,7 @@ export default function ProductivityDashboard() {
 
     async function initPinGate() {
       try {
-        const unlocked = await fetchPinSession();
+        const unlocked = await fetchPinSession(username, legacyRoot);
         if (!cancelled) setPinPhase(unlocked ? "ready" : "unlock");
       } catch {
         if (!cancelled) setPinPhase("unlock");
@@ -3436,7 +3567,7 @@ export default function ProductivityDashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [username, legacyRoot]);
 
   useEffect(() => {
     if (pinPhase !== "ready") return;
@@ -3444,7 +3575,7 @@ export default function ProductivityDashboard() {
     let cancelled = false;
 
     async function loadLocalState(): Promise<DashboardState | null> {
-      let saved = await localforage.getItem<DashboardState>(STORAGE_KEY);
+      let saved = await localforage.getItem<DashboardState>(storageKey);
       if (!saved) {
         const legacy = await localforage.getItem<DashboardState>(LEGACY_STORAGE_KEY);
         if (legacy) {
@@ -3463,17 +3594,17 @@ export default function ProductivityDashboard() {
         let saved: DashboardState | null = null;
 
         try {
-          const remote = await fetchDashboardState();
+          const remote = await fetchDashboardState(username, legacyRoot);
           if (remote) {
             saved = remote as DashboardState;
-            await localforage.setItem(STORAGE_KEY, saved);
+            await localforage.setItem(storageKey, saved);
             setSyncStatus("idle");
           } else {
             const local = await loadLocalState();
             if (local) {
               saved = local;
               try {
-                await saveDashboardStateRemote(local);
+                await saveDashboardStateRemote(username, local, legacyRoot);
                 setSyncStatus("idle");
               } catch (err) {
                 console.warn("Failed to migrate local data to server:", err);
@@ -3509,7 +3640,7 @@ export default function ProductivityDashboard() {
 
     loadState();
     return () => { cancelled = true; };
-  }, [applyLoadedState, pinPhase]);
+  }, [applyLoadedState, pinPhase, username, storageKey, legacyRoot]);
 
   useEffect(() => {
     if (!isHydrated.current) return;
@@ -3528,18 +3659,18 @@ export default function ProductivityDashboard() {
     };
 
     latestSnapshotRef.current = snapshot;
-    void localforage.setItem(STORAGE_KEY, snapshot).catch((err) => console.error("Failed to save locally:", err));
+    void localforage.setItem(storageKey, snapshot).catch((err) => console.error("Failed to save locally:", err));
 
     setSyncStatus("syncing");
     saveChainRef.current = saveChainRef.current
       .catch(() => undefined)
-      .then(() => saveDashboardStateRemote(snapshot))
+      .then(() => saveDashboardStateRemote(username, snapshot, legacyRoot))
       .then(() => setSyncStatus("idle"))
       .catch((err) => {
         console.warn("Remote save failed:", err);
         setSyncStatus("offline");
       });
-  }, [habits, weeklyFocus, reward, affirmation, weekStart, themeId, customAccent, themeManualDate, notifications, studyHours]);
+  }, [habits, weeklyFocus, reward, affirmation, weekStart, themeId, customAccent, themeManualDate, notifications, studyHours, username, storageKey, legacyRoot]);
 
   useEffect(() => {
     if (!isHydrated.current || isLoading || !notifications.enabled) return;
@@ -3549,11 +3680,11 @@ export default function ProductivityDashboard() {
   useEffect(() => {
     const flushOnExit = () => {
       const snapshot = latestSnapshotRef.current;
-      if (snapshot) saveDashboardStateKeepalive(snapshot);
+      if (snapshot) saveDashboardStateKeepalive(username, snapshot, legacyRoot);
     };
     window.addEventListener("pagehide", flushOnExit);
     return () => window.removeEventListener("pagehide", flushOnExit);
-  }, []);
+  }, [username, legacyRoot]);
 
   useEffect(() => {
     applyTheme(activeTheme.themeId, activeTheme.customAccent, activeTheme.mode);
@@ -3634,7 +3765,14 @@ export default function ProductivityDashboard() {
 
   if (pinPhase === "checking") return <LoadingScreen />;
   if (pinPhase === "unlock") {
-    return <PinGate onSuccess={() => setPinPhase("ready")} />;
+    return (
+      <PinGate
+        username={username}
+        personalized={personalizedPin}
+        legacyRoot={legacyRoot}
+        onSuccess={() => setPinPhase("ready")}
+      />
+    );
   }
   if (isLoading) return <LoadingScreen />;
 
@@ -3662,6 +3800,8 @@ export default function ProductivityDashboard() {
 
   const managePanel = (
     <ManageHabitsActivityPanel
+      username={username}
+      legacyRoot={legacyRoot}
       view={managePanelView}
       onViewChange={setManagePanelView}
       activeCount={activeHabits.length}
@@ -3714,6 +3854,8 @@ export default function ProductivityDashboard() {
 
   const manageSheetPanel = (
     <ManageHabitsActivityPanel
+      username={username}
+      legacyRoot={legacyRoot}
       view={managePanelView}
       onViewChange={setManagePanelView}
       activeCount={activeHabits.length}
@@ -3745,7 +3887,9 @@ export default function ProductivityDashboard() {
               height={36}
             />
             <div className="min-w-0">
-              <h1 className="truncate text-[15px] font-extrabold tracking-tight text-th-800 md:text-base">Tracker</h1>
+              <h1 className="truncate text-[15px] font-extrabold tracking-tight text-th-800 md:text-base">
+                {formatTrackerDisplayName(username, legacyRoot)}
+              </h1>
               {syncStatus === "offline" && (
                 <p className="text-[10px] font-medium text-amber-600">Offline — saved locally</p>
               )}
@@ -3755,7 +3899,12 @@ export default function ProductivityDashboard() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <NotificationPanel settings={notifications} onChange={setNotifications} />
+            <NotificationPanel
+              username={username}
+              legacyRoot={legacyRoot}
+              settings={notifications}
+              onChange={setNotifications}
+            />
             <ThemePicker
               themeId={activeTheme.themeId}
               customAccent={activeTheme.customAccent}
@@ -3861,10 +4010,10 @@ export default function ProductivityDashboard() {
                   perfect
                     ? "panel border-2 border-amber-400 bg-amber-50/30 shadow-lg shadow-amber-200/50"
                     : isToday
-                      ? "panel day-panel-accent home-day-body--today border-2 shadow-lg ring-1 ring-[color-mix(in_srgb,var(--day-accent)_35%,transparent)]"
+                      ? "panel home-day-body--today border-2"
                       : isFocused
                         ? "panel border-th-300 shadow-lg shadow-th-200-60"
-                        : "panel glass-card border-th-100-60"
+                        : "panel glass-card border border-th-100-60"
                 }`}
               >
                 <DayHabitSlots

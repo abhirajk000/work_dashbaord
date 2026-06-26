@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { VercelRequest } from "@vercel/node";
+import { isValidUsername, normalizeUsername } from "./username.js";
 
 export const SESSION_COOKIE_NAME = "tracker_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -26,32 +27,44 @@ function safeEqualHex(a: string, b: string): boolean {
   }
 }
 
-export function createSessionToken(): string {
+export function createSessionToken(username: string): string {
   const exp = Date.now() + SESSION_TTL_MS;
   const nonce = randomBytes(16).toString("hex");
-  const payload = `${exp}.${nonce}`;
+  const payload = `${username}.${exp}.${nonce}`;
   return `${payload}.${signPayload(payload)}`;
 }
 
-export function verifySessionToken(token: string): boolean {
+export function verifySessionToken(token: string): string | null {
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
-  const [expStr, nonce, sig] = parts;
+  if (parts.length !== 4) return null;
+  const [username, expStr, nonce, sig] = parts;
+  if (!isValidUsername(username)) return null;
   const exp = Number(expStr);
-  if (!Number.isFinite(exp) || Date.now() > exp) return false;
-  const payload = `${expStr}.${nonce}`;
-  return safeEqualHex(sig, signPayload(payload));
+  if (!Number.isFinite(exp) || Date.now() > exp) return null;
+  const payload = `${username}.${expStr}.${nonce}`;
+  if (!safeEqualHex(sig, signPayload(payload))) return null;
+  return username;
 }
 
 export function parseSessionCookie(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]+)`));
-  return match?.[1]?.trim() ?? null;
+  const token = match?.[1]?.trim() ?? null;
+  return token ? verifySessionToken(token) : null;
 }
 
+export function getSessionUsername(req: Pick<VercelRequest, "headers">): string | null {
+  if (!req.headers.cookie) return null;
+  const match = req.headers.cookie.match(
+    new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]+)`)
+  );
+  const token = match?.[1]?.trim();
+  return token ? verifySessionToken(token) : null;
+}
+
+/** @deprecated Use getSessionUsername */
 export function isSessionAuthorized(req: Pick<VercelRequest, "headers">): boolean {
-  const token = parseSessionCookie(req.headers.cookie);
-  return token ? verifySessionToken(token) : false;
+  return getSessionUsername(req) !== null;
 }
 
 function isSecureCookie(): boolean {
@@ -67,4 +80,9 @@ export function sessionCookieHeader(token: string): string {
 export function clearSessionCookieHeader(): string {
   const secure = isSecureCookie() ? "; Secure" : "";
   return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`;
+}
+
+export function normalizeRequestedUsername(raw: string): string | null {
+  const username = normalizeUsername(raw);
+  return isValidUsername(username) ? username : null;
 }

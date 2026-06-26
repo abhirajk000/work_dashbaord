@@ -8,6 +8,8 @@
     "db:migrate": "node scripts/migrate-schema.mjs",
     "db:migrate:ntfy": "node scripts/migrate-ntfy.mjs",
     "db:migrate:push": "node scripts/migrate-push.mjs",
+    "db:migrate:users": "node scripts/migrate-users.mjs",
+    "db:migrate:pin-plain": "node scripts/migrate-pin-plain.mjs",
     "generate:vapid": "node scripts/generate-vapid-keys.mjs",
     "setup:neon": "bash scripts/setup-neon.sh",
     "build": "tsc -b && vite build",

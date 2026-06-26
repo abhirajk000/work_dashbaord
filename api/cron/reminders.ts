@@ -2,10 +2,12 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../../lib/sql.js";
 import { buildHabitReminderSchedule } from "../../lib/habit-reminders.js";
 import { deliverReminder } from "../../lib/deliver-notification.js";
-import { NTFY_TOPIC, GREEN_PERCENT, normalizeNotificationSettings } from "../../lib/notification-types.js";
+import { GREEN_PERCENT, normalizeNotificationSettings } from "../../lib/notification-types.js";
 import { getDateInTimezone, shouldFireReminderInWindow } from "../../lib/reminder-window.js";
+import { getNtfyTopicForUser } from "../../lib/username.js";
+import { listUsernames } from "../../lib/users-db.js";
+import type { DashboardState } from "../../lib/dashboard-types.js";
 
-const ROW_ID = "default";
 const CRON_ROW_ID = "__cron__";
 const DATA_START_DATE = "2026-01-12";
 const MAX_CRON_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -97,6 +99,92 @@ async function setLastCronRun(now: Date): Promise<void> {
   `;
 }
 
+async function runRemindersForUser(
+  username: string,
+  state: DashboardState,
+  windowStart: Date,
+  now: Date
+): Promise<{ sent: number; errors: string[] }> {
+  const settings = normalizeNotificationSettings(state.notifications);
+  const habits = (state.habits ?? []) as Habit[];
+  const topic = getNtfyTopicForUser(username);
+
+  if (!settings.enabled) {
+    return { sent: 0, errors: [] };
+  }
+
+  const timezone = settings.timezone;
+  const today = getDateInTimezone(now, timezone);
+  let sent = 0;
+  const errors: string[] = [];
+
+  const trySend = async (kind: string, time: string, title: string, body: string, tags: string) => {
+    if (!shouldFireReminderInWindow(time, timezone, windowStart, now)) return;
+    const delivered = await deliverReminder(title, body, {
+      tags,
+      kind,
+      logDate: today,
+      tag: kind,
+      topic,
+      username,
+    });
+    if (delivered.ntfy) sent += 1;
+    if (delivered.webPush) sent += 1;
+  };
+
+  if (settings.morningEnabled) {
+    const total = getActiveHabitCount(habits, today);
+    const done = getDayDoneCount(habits, today);
+    if (total > 0 && done < total) {
+      const remaining = total - done;
+      const body =
+        done > 0
+          ? `${done}/${total} done today — ${remaining} habit${remaining === 1 ? "" : "s"} left.`
+          : `You have ${total} habit${total === 1 ? "" : "s"} to track today. Let's go!`;
+      try {
+        await trySend("morning", settings.morningTime, "☀️ Start your habits", body, "sunny");
+      } catch (err) {
+        errors.push(String(err));
+      }
+    }
+  }
+
+  if (settings.eveningEnabled) {
+    const pct = getDayCompletionPercent(habits, today);
+    const total = getActiveHabitCount(habits, today);
+    const remaining = total - getDayDoneCount(habits, today);
+    if (total > 0 && pct < GREEN_PERCENT && remaining > 0) {
+      try {
+        await trySend(
+          "evening",
+          settings.eveningTime,
+          "🌙 Complete today's habits",
+          `You're at ${pct}% — finish ${remaining} more to hit your ${GREEN_PERCENT}% goal.`,
+          "bell"
+        );
+      } catch (err) {
+        errors.push(String(err));
+      }
+    }
+  }
+
+  for (const habit of habits) {
+    if (!habit.reminderTimes?.length) continue;
+    if (!isHabitActiveOnDate(habit, today)) continue;
+    if (habit.completions[today]) continue;
+
+    for (const reminder of buildHabitReminderSchedule(habit.id, habit.name, habit.reminderTimes)) {
+      try {
+        await trySend(reminder.kind, reminder.time, reminder.title, reminder.body, reminder.tags);
+      } catch (err) {
+        errors.push(`${username}/${habit.name}@${reminder.time}: ${String(err)}`);
+      }
+    }
+  }
+
+  return { sent, errors };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   if (req.method !== "GET" && req.method !== "POST") {
@@ -115,93 +203,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       )
     );
 
-    const stateRows = await sql`SELECT data FROM dashboard_state WHERE id = ${ROW_ID}`;
-    const state =
-      (stateRows[0]?.data as { habits?: Habit[]; notifications?: Record<string, unknown> } | undefined) ?? null;
-    const settings = normalizeNotificationSettings(state?.notifications);
-    const habits = state?.habits ?? [];
+    const usernames = await listUsernames();
+    let totalSent = 0;
+    const allErrors: string[] = [];
 
-    if (!settings.enabled) {
-      await setLastCronRun(now);
-      return res.status(200).json({ ok: true, sent: 0, reason: "notifications disabled" });
-    }
+    for (const username of usernames) {
+      const stateRows = await sql`SELECT data FROM dashboard_state WHERE id = ${username}`;
+      const state = stateRows[0]?.data as DashboardState | undefined;
+      if (!state) continue;
 
-    const timezone = settings.timezone;
-    const today = getDateInTimezone(now, timezone);
-    let sent = 0;
-    const errors: string[] = [];
-
-    const trySend = async (kind: string, time: string, title: string, body: string, tags: string) => {
-      if (!shouldFireReminderInWindow(time, timezone, windowStart, now)) return;
-      const delivered = await deliverReminder(title, body, {
-        tags,
-        kind,
-        logDate: today,
-        tag: kind,
-      });
-      if (delivered.ntfy) sent += 1;
-      if (delivered.webPush) sent += 1;
-    };
-
-    if (settings.morningEnabled) {
-      const total = getActiveHabitCount(habits, today);
-      const done = getDayDoneCount(habits, today);
-      if (total > 0 && done < total) {
-        const remaining = total - done;
-        const body =
-          done > 0
-            ? `${done}/${total} done today — ${remaining} habit${remaining === 1 ? "" : "s"} left.`
-            : `You have ${total} habit${total === 1 ? "" : "s"} to track today. Let's go!`;
-        try {
-          await trySend("morning", settings.morningTime, "☀️ Start your habits", body, "sunny");
-        } catch (err) {
-          errors.push(String(err));
-        }
-      }
-    }
-
-    if (settings.eveningEnabled) {
-      const pct = getDayCompletionPercent(habits, today);
-      const total = getActiveHabitCount(habits, today);
-      const remaining = total - getDayDoneCount(habits, today);
-      if (total > 0 && pct < GREEN_PERCENT && remaining > 0) {
-        try {
-          await trySend(
-            "evening",
-            settings.eveningTime,
-            "🌙 Complete today's habits",
-            `You're at ${pct}% — finish ${remaining} more to hit your ${GREEN_PERCENT}% goal.`,
-            "bell"
-          );
-        } catch (err) {
-          errors.push(String(err));
-        }
-      }
-    }
-
-    for (const habit of habits) {
-      if (!habit.reminderTimes?.length) continue;
-      if (!isHabitActiveOnDate(habit, today)) continue;
-      if (habit.completions[today]) continue;
-
-      for (const reminder of buildHabitReminderSchedule(habit.id, habit.name, habit.reminderTimes)) {
-        try {
-          await trySend(reminder.kind, reminder.time, reminder.title, reminder.body, reminder.tags);
-        } catch (err) {
-          errors.push(`${habit.name}@${reminder.time}: ${String(err)}`);
-        }
-      }
+      const result = await runRemindersForUser(username, state, windowStart, now);
+      totalSent += result.sent;
+      allErrors.push(...result.errors);
     }
 
     await setLastCronRun(now);
 
     return res.status(200).json({
       ok: true,
-      sent,
-      topic: NTFY_TOPIC,
+      sent: totalSent,
+      users: usernames.length,
       windowStart: windowStart.toISOString(),
       windowEnd: now.toISOString(),
-      errors: errors.length ? errors : undefined,
+      errors: allErrors.length ? allErrors : undefined,
     });
   } catch (err) {
     console.error("Cron reminders error:", err);

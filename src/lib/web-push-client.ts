@@ -1,3 +1,8 @@
+function remindersApiUrl(username: string, legacyRoot = false): string {
+  const base = legacyRoot ? "/api/reminders" : `/api/${encodeURIComponent(username)}/reminders`;
+  return `${base}?op=subscribe`;
+}
+
 function getHeaders(): HeadersInit {
   return { "Content-Type": "application/json" };
 }
@@ -41,7 +46,10 @@ export async function getWebPushPermission(): Promise<NotificationPermission | "
   return Notification.permission;
 }
 
-export async function subscribeWebPush(): Promise<"subscribed" | "denied" | "unsupported"> {
+export async function subscribeWebPush(
+  username: string,
+  legacyRoot = false
+): Promise<"subscribed" | "denied" | "unsupported"> {
   if (!isWebPushSupported()) return "unsupported";
 
   const permission = await Notification.requestPermission();
@@ -64,7 +72,7 @@ export async function subscribeWebPush(): Promise<"subscribed" | "denied" | "uns
   }
 
   const json = subscription.toJSON();
-  const res = await fetch("/api/reminders?op=subscribe", {
+  const res = await fetch(remindersApiUrl(username, legacyRoot), {
     method: "POST",
     headers: getHeaders(),
     credentials: "include",
@@ -82,14 +90,14 @@ export async function subscribeWebPush(): Promise<"subscribed" | "denied" | "uns
   return "subscribed";
 }
 
-export async function unsubscribeWebPush(): Promise<void> {
+export async function unsubscribeWebPush(username: string, legacyRoot = false): Promise<void> {
   const registration = await navigator.serviceWorker.getRegistration();
   const subscription = await registration?.pushManager.getSubscription();
   if (!subscription) return;
 
   const endpoint = subscription.endpoint;
   await subscription.unsubscribe();
-  await fetch("/api/push/subscribe", {
+  await fetch(remindersApiUrl(username, legacyRoot), {
     method: "DELETE",
     headers: getHeaders(),
     credentials: "include",
@@ -97,7 +105,10 @@ export async function unsubscribeWebPush(): Promise<void> {
   });
 }
 
-export async function syncWebPushSubscription(): Promise<"subscribed" | "not-subscribed" | "unsupported"> {
+export async function syncWebPushSubscription(
+  username: string,
+  legacyRoot = false
+): Promise<"subscribed" | "not-subscribed" | "unsupported"> {
   if (!isWebPushSupported()) return "unsupported";
   if (Notification.permission !== "granted") return "not-subscribed";
 
@@ -106,7 +117,7 @@ export async function syncWebPushSubscription(): Promise<"subscribed" | "not-sub
   if (!subscription) return "not-subscribed";
 
   const json = subscription.toJSON();
-  const res = await fetch("/api/reminders?op=subscribe", {
+  const res = await fetch(remindersApiUrl(username, legacyRoot), {
     method: "POST",
     headers: getHeaders(),
     credentials: "include",

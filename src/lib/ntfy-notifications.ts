@@ -1,6 +1,20 @@
-import { NTFY_TOPIC, type NotificationSettings } from "../../lib/notification-types";
+import { getNtfyTopicForUser } from "../../lib/username";
+import type { NotificationSettings } from "../../lib/notification-types";
 
-export const NTFY_SUBSCRIBE_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+export const NTFY_APP_DOWNLOAD_URL = "https://ntfy.sh/app";
+
+export function getNtfyTopicName(username: string): string {
+  return getNtfyTopicForUser(username);
+}
+
+export function getNtfySubscribeUrl(username: string): string {
+  return `https://ntfy.sh/${getNtfyTopicForUser(username)}`;
+}
+
+function remindersApiUrl(username: string, op: string, legacyRoot = false): string {
+  const base = legacyRoot ? "/api/reminders" : `/api/${encodeURIComponent(username)}/reminders`;
+  return `${base}?op=${op}`;
+}
 
 function getHeaders(): HeadersInit {
   return { "Content-Type": "application/json" };
@@ -14,18 +28,22 @@ export function getDeviceTimezone(): string {
   }
 }
 
-export async function scheduleHabitReminders(options?: {
-  habits?: Array<{
-    id: string;
-    name: string;
-    completions: Record<string, boolean>;
-    createdAt: string;
-    deletedAt?: string;
-    reminderTimes?: string[];
-  }>;
-  notifications?: NotificationSettings;
-}): Promise<void> {
-  const res = await fetch("/api/reminders?op=schedule", {
+export async function scheduleHabitReminders(
+  username: string,
+  options?: {
+    habits?: Array<{
+      id: string;
+      name: string;
+      completions: Record<string, boolean>;
+      createdAt: string;
+      deletedAt?: string;
+      reminderTimes?: string[];
+    }>;
+    notifications?: NotificationSettings;
+  },
+  legacyRoot = false
+): Promise<void> {
+  const res = await fetch(remindersApiUrl(username, "schedule", legacyRoot), {
     method: "POST",
     headers: getHeaders(),
     credentials: "include",
@@ -37,8 +55,8 @@ export async function scheduleHabitReminders(options?: {
   }
 }
 
-export async function sendTestNtfyNotification(): Promise<void> {
-  const res = await fetch("/api/reminders?op=test", {
+export async function sendTestNtfyNotification(username: string, legacyRoot = false): Promise<void> {
+  const res = await fetch(remindersApiUrl(username, "test", legacyRoot), {
     method: "POST",
     headers: getHeaders(),
     credentials: "include",
@@ -50,12 +68,16 @@ export async function sendTestNtfyNotification(): Promise<void> {
   }
 }
 
-export async function sendHabitReminderPreview(options: {
-  habitName: string;
-  time?: string;
-  variant?: "primary" | "followup";
-}): Promise<void> {
-  const res = await fetch("/api/reminders?op=test", {
+export async function sendHabitReminderPreview(
+  username: string,
+  options: {
+    habitName: string;
+    time?: string;
+    variant?: "primary" | "followup";
+  },
+  legacyRoot = false
+): Promise<void> {
+  const res = await fetch(remindersApiUrl(username, "test", legacyRoot), {
     method: "POST",
     headers: getHeaders(),
     credentials: "include",

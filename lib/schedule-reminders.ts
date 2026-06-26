@@ -46,6 +46,7 @@ function isHabitActiveOnDate(habit: Habit, date: string): boolean {
 export async function scheduleUpcomingHabitReminders(
   habits: Habit[],
   timezone: string,
+  topic: string,
   now = new Date()
 ): Promise<{ scheduled: number; errors: string[] }> {
   const today = getDateInTimezone(now, timezone);
@@ -73,6 +74,7 @@ export async function scheduleUpcomingHabitReminders(
             sequenceId: `${reminder.kind}-${date}`,
             kind: reminder.kind,
             logDate: date,
+            topic,
           });
 
           if (sent) scheduled += 1;

@@ -2,10 +2,10 @@ import { sendNtfyNotification } from "./ntfy.js";
 import {
   alreadyLogged,
   markLogged,
-  NTFY_TOPIC,
   WEB_PUSH_LOG_TOPIC,
 } from "./notification-log.js";
-import { isWebPushConfigured, sendWebPushToAll } from "./web-push.js";
+import { isWebPushConfigured, sendWebPushToUser } from "./web-push.js";
+import { NTFY_TOPIC } from "./notification-types.js";
 
 export type DeliverOptions = {
   tags?: string;
@@ -15,6 +15,8 @@ export type DeliverOptions = {
   skipLog?: boolean;
   logDate?: string;
   kind?: string;
+  topic?: string;
+  username?: string;
 };
 
 export async function deliverNtfyReminder(
@@ -22,21 +24,22 @@ export async function deliverNtfyReminder(
   body: string,
   options?: DeliverOptions
 ): Promise<boolean> {
+  const topic = options?.topic ?? NTFY_TOPIC;
   const kind = options?.kind;
   const logDate = options?.logDate;
 
-  if (!options?.skipLog && kind && logDate && (await alreadyLogged(NTFY_TOPIC, kind, logDate))) {
+  if (!options?.skipLog && kind && logDate && (await alreadyLogged(topic, kind, logDate))) {
     return false;
   }
 
-  await sendNtfyNotification(title, body, {
+  await sendNtfyNotification(topic, title, body, {
     tags: options?.tags,
     delay: options?.delay,
     sequenceId: options?.sequenceId,
   });
 
   if (!options?.skipLog && kind && logDate) {
-    await markLogged(NTFY_TOPIC, kind, logDate);
+    await markLogged(topic, kind, logDate);
   }
 
   return true;
@@ -48,15 +51,17 @@ export async function deliverWebPushReminder(
   options?: DeliverOptions
 ): Promise<boolean> {
   if (!isWebPushConfigured()) return false;
+  if (!options?.username) return false;
 
   const kind = options?.kind;
   const logDate = options?.logDate;
+  const logTopic = `${WEB_PUSH_LOG_TOPIC}:${options.username}`;
 
-  if (!options?.skipLog && kind && logDate && (await alreadyLogged(WEB_PUSH_LOG_TOPIC, kind, logDate))) {
+  if (!options?.skipLog && kind && logDate && (await alreadyLogged(logTopic, kind, logDate))) {
     return false;
   }
 
-  const sent = await sendWebPushToAll({
+  const sent = await sendWebPushToUser(options.username, {
     title,
     body,
     tag: options?.tag ?? options?.kind,
@@ -65,7 +70,7 @@ export async function deliverWebPushReminder(
   if (sent <= 0) return false;
 
   if (!options?.skipLog && kind && logDate) {
-    await markLogged(WEB_PUSH_LOG_TOPIC, kind, logDate);
+    await markLogged(logTopic, kind, logDate);
   }
 
   return true;

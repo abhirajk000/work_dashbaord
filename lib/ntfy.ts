@@ -1,15 +1,16 @@
-/** Fixed ntfy topic — subscribe to this in the ntfy app on any device. */
+/** @deprecated Legacy global topic — use getNtfyTopicForUser(username) */
 export const NTFY_TOPIC = "Tracker";
 
 export function getNtfyBaseUrl(): string {
   return (process.env.NTFY_SERVER ?? "https://ntfy.sh").replace(/\/$/, "");
 }
 
-export function getNtfyTopicUrl(): string {
-  return `${getNtfyBaseUrl()}/${NTFY_TOPIC}`;
+export function getNtfyTopicUrl(topic: string): string {
+  return `${getNtfyBaseUrl()}/${topic}`;
 }
 
 export async function sendNtfyNotification(
+  topic: string,
   title: string,
   body: string,
   options?: { click?: string; tags?: string; priority?: string; delay?: string; sequenceId?: string }
@@ -27,7 +28,7 @@ export async function sendNtfyNotification(
     .filter(Boolean);
 
   const payload: Record<string, unknown> = {
-    topic: NTFY_TOPIC,
+    topic,
     title,
     message: body,
     tags,

@@ -1,4 +1,4 @@
--- Tracker database schema (multi-user)
+-- Fresh tracker database schema (multi-user)
 
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,

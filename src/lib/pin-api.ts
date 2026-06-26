@@ -1,14 +1,20 @@
-const API_URL = "/api/pin";
+function pinApiUrl(username: string, legacyRoot = false): string {
+  return legacyRoot ? "/api/pin" : `/api/${encodeURIComponent(username)}/pin`;
+}
 
-export async function fetchPinSession(): Promise<boolean> {
-  const res = await fetch(API_URL, { credentials: "include" });
+export async function fetchPinSession(username: string, legacyRoot = false): Promise<boolean> {
+  const res = await fetch(pinApiUrl(username, legacyRoot), { credentials: "include" });
   if (!res.ok) return false;
   const data = (await res.json()) as { unlocked?: boolean };
   return Boolean(data.unlocked);
 }
 
-export async function verifyPinRemote(pin: string): Promise<boolean> {
-  const res = await fetch(API_URL, {
+export async function verifyPinRemote(
+  username: string,
+  pin: string,
+  legacyRoot = false
+): Promise<boolean> {
+  const res = await fetch(pinApiUrl(username, legacyRoot), {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
