@@ -215,17 +215,8 @@ body,
     border-color: var(--day-item-border) !important;
   }
 
-  .home-day-body--today {
-    border-color: #ef4444;
-    box-shadow:
-      0 0 0 2px rgba(239, 68, 68, 0.8),
-      0 0 16px rgba(239, 68, 68, 0.42),
-      0 0 28px rgba(239, 68, 68, 0.18);
-    animation: today-focus-glow 2.5s ease-in-out infinite;
-  }
-
   .home-day-footer .day-progress-bar {
-    height: 7px;
+    height: 4px;
   }
 
   .home-bottom-dock {
@@ -453,7 +444,7 @@ html.theme-glass .mobile-insights-sheet-grabber-bar {
   }
 
   .day-progress-bar {
-    height: 8px;
+    height: 5px;
   }
 }
 
@@ -485,11 +476,6 @@ html.theme-glass .mobile-insights-sheet-grabber-bar {
   }
 }
 
-.habit-slot-item {
-  border: 1px solid var(--day-item-border);
-  background: color-mix(in srgb, var(--surface-color, #fff) 94%, transparent);
-}
-
 .habit-slot-h {
   height: var(--habit-slot-h);
   min-height: var(--habit-slot-h);
@@ -499,10 +485,17 @@ html.theme-glass .mobile-insights-sheet-grabber-bar {
 
 .habit-slots-wrap > .habit-slots-stack {
   flex-shrink: 0;
-  height: calc(var(--habit-slot-h) * 7 + 24px);
-  min-height: calc(var(--habit-slot-h) * 7 + 24px);
-  max-height: calc(var(--habit-slot-h) * 7 + 24px);
+  height: calc(var(--habit-slot-h) * 7);
+  min-height: calc(var(--habit-slot-h) * 7);
+  max-height: calc(var(--habit-slot-h) * 7);
   overflow: hidden;
+  border: 1px solid var(--day-item-border);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--surface-color, #fff) 96%, transparent);
+}
+
+.habit-slots-stack > .habit-slot-h:not(:last-child) {
+  border-bottom: 1px solid color-mix(in srgb, var(--day-item-border) 70%, transparent);
 }
 
 .habit-editor-list {
@@ -519,19 +512,11 @@ html.theme-glass .mobile-insights-sheet-grabber-bar {
 }
 
 .habit-slot-empty {
-  background: color-mix(in srgb, var(--th-50) 35%, transparent);
-  border: 1px solid var(--day-item-border);
-  border-style: dashed;
-  opacity: 0.85;
-}
-
-html.theme-glass .habit-slot-empty {
-  background: color-mix(in srgb, var(--glass-surface-muted) 55%, transparent);
-  border-color: color-mix(in srgb, var(--glass-border-subtle) 90%, transparent);
+  background: transparent;
 }
 
 .day-progress-bar {
-  height: 10px;
+  height: 5px;
 }
 
 .week-score-panel {
@@ -1087,17 +1072,16 @@ html.theme-glass .theme-picker-trigger {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.9);
 }
 
-html.theme-glass .group.habit-slot-h,
-html.theme-glass .habit-slot-item {
+html.theme-glass .group.habit-slot-h {
+  background: transparent;
+}
+
+html.theme-glass .habit-slots-wrap > .habit-slots-stack {
   background: var(--glass-surface);
   backdrop-filter: blur(14px) saturate(170%) brightness(1.03);
   -webkit-backdrop-filter: blur(14px) saturate(170%) brightness(1.03);
-  border: 1px solid var(--day-item-border);
+  border-color: var(--day-item-border);
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.85);
-}
-
-html.theme-glass .habit-slot-empty {
-  border: 1px dashed var(--day-item-border);
 }
 
 html.theme-glass .bg-grad-th-footer {
@@ -1216,17 +1200,31 @@ html.theme-dark .theme-picker-menu {
     0 6px 18px color-mix(in srgb, var(--th-800) 12%, transparent);
 }
 
+/* Today — red border on date header + habit card (mobile + desktop) */
+.home-day-body--today {
+  border-color: #ef4444 !important;
+  box-shadow:
+    0 0 0 2px rgba(239, 68, 68, 0.8),
+    0 0 16px rgba(239, 68, 68, 0.42),
+    0 0 28px rgba(239, 68, 68, 0.18);
+  animation: today-focus-glow 2.5s ease-in-out infinite;
+}
+
+.day-card-header.day-card-header-today {
+  border: 2px solid #ef4444;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 0 2px rgba(239, 68, 68, 0.8),
+    0 0 16px rgba(239, 68, 68, 0.42),
+    0 0 28px rgba(239, 68, 68, 0.18);
+  animation: today-focus-glow 2.5s ease-in-out infinite;
+}
+
 .day-card-header-tinted {
   background: linear-gradient(145deg, var(--day-from) 0%, var(--day-via) 55%, var(--day-to) 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 6px 18px color-mix(in srgb, var(--day-to) 28%, transparent);
-}
-
-.day-card-header-today {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 8px 22px color-mix(in srgb, var(--day-accent) 42%, transparent);
 }
 
 .day-card-header-perfect {

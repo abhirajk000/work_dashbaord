@@ -83,7 +83,7 @@ export default function SignupPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
               className="w-full rounded-xl border border-th-200 bg-white px-3 py-2.5 text-sm font-semibold text-th-800 outline-none transition focus:border-th-400 focus:ring-2 focus:ring-th-200"
-              placeholder="yashu"
+              placeholder="username"
               autoFocus
               disabled={busy}
             />

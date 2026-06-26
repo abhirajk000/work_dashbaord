@@ -2061,7 +2061,7 @@ function TaskCheck({
   if (locked) {
     return (
       <div
-        className={`habit-slot-h habit-slot-item flex items-center gap-2.5 rounded-md px-1.5 ${
+        className={`habit-slot-h flex items-center gap-2.5 rounded-md px-1.5 ${
           checked ? "bg-th-100-40" : ""
         }`}
       >
@@ -2084,7 +2084,7 @@ function TaskCheck({
       onClick={onToggle}
       aria-checked={checked}
       role="checkbox"
-      className={`group habit-slot-h habit-slot-item flex w-full items-center gap-2.5 rounded-md px-1.5 text-left transition-all active:scale-[0.98] ${
+      className={`group habit-slot-h flex w-full items-center gap-2.5 rounded-md px-1.5 text-left transition-all active:scale-[0.98] ${
         checked ? "bg-th-100-60" : "hover:bg-white/70"
       }`}
     >
@@ -2121,7 +2121,7 @@ function DayHabitSlots({
 
   return (
     <div className="habit-slots-wrap shrink-0 p-1.5 md:p-1">
-      <div className="habit-slots-stack relative flex flex-col gap-1">
+      <div className="habit-slots-stack relative flex flex-col">
         {Array.from({ length: MAX_HABITS }, (_, index) => {
           const habit = tracking ? dayHabits[index] : undefined;
           if (habit) {
@@ -4027,7 +4027,7 @@ export default function ProductivityDashboard({
                     <p className="text-center text-xs font-bold text-th-400">—</p>
                   ) : (
                     <>
-                  <div className="day-progress-bar mb-1.5 overflow-hidden rounded-full bg-th-100">
+                  <div className="day-progress-bar mb-1 overflow-hidden rounded-full bg-th-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
                         pct === 100
