@@ -1456,7 +1456,7 @@ function DayCardHeader({
       ? [
           "day-card-header-tinted",
           "day-card-header-today",
-          isFocused || isToday ? "day-card-header-focused ring-2 ring-red-400/80 ring-offset-2 ring-offset-th-page" : "",
+          isFocused ? "day-card-header-focused" : "",
         ]
           .filter(Boolean)
           .join(" ")
@@ -4010,7 +4010,7 @@ export default function ProductivityDashboard({
                   perfect
                     ? "panel border-2 border-amber-400 bg-amber-50/30 shadow-lg shadow-amber-200/50"
                     : isToday
-                      ? "panel home-day-body--today border-2"
+                      ? "panel home-day-body--today border"
                       : isFocused
                         ? "panel border-th-300 shadow-lg shadow-th-200-60"
                         : "panel glass-card border border-th-100-60"

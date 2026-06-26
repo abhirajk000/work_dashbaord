@@ -1204,19 +1204,17 @@ html.theme-dark .theme-picker-menu {
 .home-day-body--today {
   border-color: #ef4444 !important;
   box-shadow:
-    0 0 0 2px rgba(239, 68, 68, 0.8),
-    0 0 16px rgba(239, 68, 68, 0.42),
-    0 0 28px rgba(239, 68, 68, 0.18);
+    0 0 10px rgba(239, 68, 68, 0.28),
+    0 0 18px rgba(239, 68, 68, 0.12);
   animation: today-focus-glow 2.5s ease-in-out infinite;
 }
 
 .day-card-header.day-card-header-today {
-  border: 2px solid #ef4444;
+  border: 1px solid #ef4444;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 0 0 2px rgba(239, 68, 68, 0.8),
-    0 0 16px rgba(239, 68, 68, 0.42),
-    0 0 28px rgba(239, 68, 68, 0.18);
+    0 0 10px rgba(239, 68, 68, 0.28),
+    0 0 18px rgba(239, 68, 68, 0.12);
   animation: today-focus-glow 2.5s ease-in-out infinite;
 }
 
@@ -1302,15 +1300,13 @@ html.theme-dark .theme-picker-menu {
 @keyframes today-focus-glow {
   0%, 100% {
     box-shadow:
-      0 0 0 2px rgba(239, 68, 68, 0.75),
-      0 0 14px rgba(239, 68, 68, 0.35),
-      0 0 24px rgba(239, 68, 68, 0.14);
+      0 0 8px rgba(239, 68, 68, 0.22),
+      0 0 16px rgba(239, 68, 68, 0.1);
   }
   50% {
     box-shadow:
-      0 0 0 2px rgba(239, 68, 68, 0.95),
-      0 0 22px rgba(239, 68, 68, 0.55),
-      0 0 36px rgba(239, 68, 68, 0.22);
+      0 0 12px rgba(239, 68, 68, 0.35),
+      0 0 22px rgba(239, 68, 68, 0.15);
   }
 }
 
